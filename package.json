@@ -1,0 +1,58 @@
+{
+  "name": "@oakoliver/bubbletea",
+  "version": "1.0.0",
+  "description": "Elm Architecture TUI framework for TypeScript — zero-dependency port of Charmbracelet's Bubbletea",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build:esm": "esbuild src/index.ts --bundle --format=esm --platform=node --outfile=dist/index.js --target=esnext",
+    "build:cjs": "esbuild src/index.ts --bundle --format=cjs --platform=node --outfile=dist/index.cjs --target=esnext",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "tui",
+    "terminal",
+    "ui",
+    "framework",
+    "elm",
+    "bubbletea",
+    "charmbracelet",
+    "interactive",
+    "cli",
+    "react",
+    "typescript"
+  ],
+  "author": "Antonio Oliveira <antonio@oakoliver.com> (https://oakoliver.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oakoliver/bubbletea"
+  },
+  "homepage": "https://github.com/oakoliver/bubbletea#readme",
+  "bugs": {
+    "url": "https://github.com/oakoliver/bubbletea/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "esbuild": "^0.27.4",
+    "typescript": "^5"
+  }
+}
