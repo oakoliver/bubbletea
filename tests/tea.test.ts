@@ -680,6 +680,96 @@ describe('Commands', () => {
   });
 });
 
+// ─── Go Parity: commands_test.go ────────────────────────────────────────────
+// Port of bubbletea/commands_test.go
+
+import { Tick, Every } from '../src/commands.js';
+import { NilRenderer } from '../src/renderer.js';
+
+describe('Go Parity: commands_test.go', () => {
+  // TestEvery: Verifies Every command returns the expected message after firing
+  test('TestEvery — returns expected msg', async () => {
+    const expected = 'every ms';
+    const cmd = Every(1, (_t: Date) => expected);
+    expect(cmd).not.toBeNull();
+    const msg = await cmd!();
+    expect(msg).toBe(expected);
+  });
+
+  // TestTick: Verifies Tick command returns the expected message after firing
+  test('TestTick — returns expected msg', async () => {
+    const expected = 'tick';
+    const cmd = Tick(1, (_t: Date) => expected);
+    expect(cmd).not.toBeNull();
+    const msg = await cmd!();
+    expect(msg).toBe(expected);
+  });
+
+  // TestBatch: Tests Batch behavior matching Go's testMultipleCommands[BatchMsg]
+  describe('TestBatch', () => {
+    test('nil cmd — returns null', () => {
+      // In Go: Batch(nil) returns nil
+      const b = Batch(null);
+      expect(b).toBeNull();
+    });
+
+    test('empty cmd — returns null', () => {
+      // In Go: Batch() returns nil
+      const b = Batch();
+      expect(b).toBeNull();
+    });
+
+    test('single cmd — returns QuitMsg', () => {
+      // In Go: Batch(Quit)() returns QuitMsg
+      const b = Batch(Quit);
+      expect(b).not.toBeNull();
+      const msg = b!();
+      expect(msg).toBeInstanceOf(QuitMsg);
+    });
+
+    test('mixed nil cmds — filters nils and returns BatchMsg with len 2', () => {
+      // In Go: Batch(nil, Quit, nil, Quit, nil, nil)() returns []Cmd with len 2
+      const b = Batch(null, Quit, null, Quit, null, null);
+      expect(b).not.toBeNull();
+      const msg = b!();
+      expect(msg).toBeInstanceOf(BatchMsg);
+      expect((msg as BatchMsg).cmds.length).toBe(2);
+    });
+  });
+
+  // TestSequence: Tests Sequence behavior matching Go's testMultipleCommands[sequenceMsg]
+  describe('TestSequence', () => {
+    test('nil cmd — returns null', () => {
+      // In Go: Sequence(nil) returns nil
+      const s = Sequence(null);
+      expect(s).toBeNull();
+    });
+
+    test('empty cmd — returns null', () => {
+      // In Go: Sequence() returns nil
+      const s = Sequence();
+      expect(s).toBeNull();
+    });
+
+    test('single cmd — returns QuitMsg', () => {
+      // In Go: Sequence(Quit)() returns QuitMsg
+      const s = Sequence(Quit);
+      expect(s).not.toBeNull();
+      const msg = s!();
+      expect(msg).toBeInstanceOf(QuitMsg);
+    });
+
+    test('mixed nil cmds — filters nils and returns SequenceMsg with len 2', () => {
+      // In Go: Sequence(nil, Quit, nil, Quit, nil, nil)() returns []Cmd with len 2
+      const s = Sequence(null, Quit, null, Quit, null, null);
+      expect(s).not.toBeNull();
+      const msg = s!();
+      expect(msg).toBeInstanceOf(SequenceMsg);
+      expect((msg as SequenceMsg).cmds.length).toBe(2);
+    });
+  });
+});
+
 describe('Types', () => {
   test('KeyPressMsg toString', () => {
     const msg = new KeyPressMsg({ text: 'a', mod: KeyMod.None, code: 0x61 });
@@ -796,3 +886,281 @@ async function testTeaWithFilter(preventCount: number): Promise<void> {
 
   expect(shutdowns).toBe(preventCount);
 }
+
+// ─── Go Parity: options_test.go ─────────────────────────────────────────────
+// Port of bubbletea/options_test.go
+// Tests verify that program options are correctly applied.
+// Since TypeScript fields are private, we test through behavior.
+
+describe('Go Parity: options_test.go — TestOptions', () => {
+  // t.Run("output", func...)
+  // Verified by testing that custom output receives data
+  test('output — custom output stream', async () => {
+    const output = new PassThrough();
+    let data = '';
+    output.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+
+    const m = new TestModel();
+    const p = new Program(
+      m,
+      WithInput(nullInput()),
+      WithOutput(output),
+      WithoutSignalHandler(),
+      WithWindowSize(80, 24),
+    );
+
+    // Quit after model executes
+    const poll = setInterval(() => {
+      if (m.executed) {
+        clearInterval(poll);
+        p.quit();
+      }
+    }, 1);
+
+    await p.run();
+    clearInterval(poll);
+
+    // Output should have received render data
+    expect(data.length).toBeGreaterThan(0);
+  });
+
+  // t.Run("renderer", func...)
+  // Tests WithoutRenderer — no output should be produced
+  test('renderer — WithoutRenderer disables rendering', async () => {
+    const output = new PassThrough();
+    let data = '';
+    output.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+
+    const m = new TestModel();
+    const p = new Program(
+      m,
+      WithInput(nullInput()),
+      WithOutput(output),
+      WithoutRenderer(),
+      WithoutSignalHandler(),
+      WithWindowSize(80, 24),
+    );
+
+    const poll = setInterval(() => {
+      if (m.executed) {
+        clearInterval(poll);
+        p.quit();
+      }
+    }, 1);
+
+    await p.run();
+    clearInterval(poll);
+
+    // With renderer disabled, output should be minimal (only terminal setup sequences)
+    // The model's view() "success" should NOT appear
+    expect(data).not.toContain('success');
+  });
+
+  // t.Run("without signals", func...)
+  // Note: Go tests WithoutSignals() which sets ignoreSignals.
+  // TypeScript has WithoutSignalHandler() which disables SIGINT/SIGTERM handlers.
+  // We test that the program doesn't respond to signals when disabled.
+  // This is inherently hard to test in unit tests, so we verify the option doesn't throw.
+  test('without signals — WithoutSignalHandler option works', async () => {
+    const m = new TestModel();
+    const p = new Program(
+      m,
+      WithInput(nullInput()),
+      WithOutput(nullOutput()),
+      WithoutSignalHandler(),
+      WithoutRenderer(),
+      WithWindowSize(80, 24),
+    );
+
+    const poll = setInterval(() => {
+      if (m.executed) {
+        clearInterval(poll);
+        p.quit();
+      }
+    }, 1);
+
+    // Should complete without error
+    await p.run();
+    clearInterval(poll);
+    expect(m.executed).toBe(true);
+  });
+
+  // t.Run("filter", func...)
+  // Tests WithFilter — already covered by TestTeaWithFilter tests above
+  // But let's add explicit verification that filter is invoked
+  test('filter — WithFilter is called on messages', async () => {
+    const m = new TestModel();
+    let filterCalled = false;
+
+    const p = new Program(
+      m,
+      WithInput(nullInput()),
+      WithOutput(nullOutput()),
+      WithoutRenderer(),
+      WithoutSignalHandler(),
+      WithWindowSize(80, 24),
+      WithFilter((_model: Model, msg: Msg) => {
+        filterCalled = true;
+        return msg;
+      }),
+    );
+
+    const poll = setInterval(() => {
+      if (m.executed) {
+        clearInterval(poll);
+        p.quit();
+      }
+    }, 1);
+
+    await p.run();
+    clearInterval(poll);
+
+    // Filter should have been called (at least for WindowSizeMsg and QuitMsg)
+    expect(filterCalled).toBe(true);
+  });
+
+  // t.Run("external context", func...)
+  // Tests WithContext (Go) / WithAbortSignal (TypeScript)
+  test('external context — WithAbortSignal cancels program', async () => {
+    const ac = new AbortController();
+    const m = new TestModel();
+    const p = new Program(
+      m,
+      WithInput(nullInput()),
+      WithOutput(nullOutput()),
+      WithoutRenderer(),
+      WithoutSignalHandler(),
+      WithWindowSize(80, 24),
+      WithAbortSignal(ac.signal),
+    );
+
+    const poll = setInterval(() => {
+      if (m.executed) {
+        clearInterval(poll);
+        ac.abort();
+      }
+    }, 1);
+
+    let err: Error | null = null;
+    try {
+      await p.run();
+    } catch (e) {
+      err = e as Error;
+    }
+
+    clearInterval(poll);
+    expect(err).toBe(ErrProgramKilled);
+  });
+
+  // t.Run("input options", func...)
+  describe('input options', () => {
+    // t.Run("nil input", func...)
+    test('nil input — disables input', async () => {
+      const m = new TestModel();
+      const p = new Program(
+        m,
+        WithInput(null),
+        WithOutput(nullOutput()),
+        WithoutRenderer(),
+        WithoutSignalHandler(),
+        WithWindowSize(80, 24),
+      );
+
+      const poll = setInterval(() => {
+        if (m.executed) {
+          clearInterval(poll);
+          p.quit();
+        }
+      }, 1);
+
+      // Should complete without error even with null input
+      await p.run();
+      clearInterval(poll);
+      expect(m.executed).toBe(true);
+    });
+
+    // t.Run("custom input", func...)
+    test('custom input — reads from custom stream', async () => {
+      const input = inputWithData('q');
+      const m = new TestModel();
+      const p = new Program(
+        m,
+        WithInput(input),
+        WithOutput(nullOutput()),
+        WithoutRenderer(),
+        WithoutSignalHandler(),
+        WithWindowSize(80, 24),
+      );
+
+      // Program should quit when it receives 'q' from input
+      await p.run();
+      expect(m.executed).toBe(true);
+    });
+  });
+
+  // t.Run("startup options", func...)
+  describe('startup options', () => {
+    // t.Run("without catch panics", func...)
+    test('without catch panics — panics propagate', async () => {
+      const m = new TestModel();
+      const p = new Program(
+        m,
+        WithInput(nullInput()),
+        WithOutput(nullOutput()),
+        WithoutRenderer(),
+        WithoutSignalHandler(),
+        WithWindowSize(80, 24),
+        WithoutCatchPanics(),
+      );
+
+      const poll = setInterval(() => {
+        if (m.executed) {
+          clearInterval(poll);
+          p.send(new PanicMsg());
+        }
+      }, 1);
+
+      let thrownError: Error | null = null;
+      try {
+        await p.run();
+      } catch (e) {
+        thrownError = e as Error;
+      }
+
+      clearInterval(poll);
+      
+      // With catch panics disabled, the error should propagate with the actual message
+      expect(thrownError).not.toBeNull();
+      expect(thrownError?.message).toBe('testing panic behavior');
+    });
+
+    // t.Run("without signal handler", func...)
+    // Already tested above in "without signals" test
+    test('without signal handler — disables signal handling', async () => {
+      const m = new TestModel();
+      const p = new Program(
+        m,
+        WithInput(nullInput()),
+        WithOutput(nullOutput()),
+        WithoutRenderer(),
+        WithoutSignalHandler(),
+        WithWindowSize(80, 24),
+      );
+
+      const poll = setInterval(() => {
+        if (m.executed) {
+          clearInterval(poll);
+          p.quit();
+        }
+      }, 1);
+
+      await p.run();
+      clearInterval(poll);
+      expect(m.executed).toBe(true);
+    });
+  });
+});

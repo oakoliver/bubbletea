@@ -1,6 +1,6 @@
 {
   "name": "@oakoliver/bubbletea",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Elm Architecture TUI framework for TypeScript — zero-dependency port of Charmbracelet's Bubbletea",
   "type": "module",
   "main": "./dist/index.cjs",
