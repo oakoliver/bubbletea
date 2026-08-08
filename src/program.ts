@@ -6,31 +6,61 @@
  * Zero-dependency — uses only Node.js built-ins.
  */
 
+import {
+  closeSync,
+  createReadStream,
+  createWriteStream,
+  openSync,
+  type ReadStream,
+  type WriteStream,
+} from 'node:fs';
 import type { Readable, Writable } from 'node:stream';
 import {
   type Msg,
   type Cmd,
   type Model,
+  type ExecCommand,
+  type ExecCallback,
   QuitMsg,
   InterruptMsg,
   SuspendMsg,
   ResumeMsg,
   WindowSizeMsg,
+  WindowSizeRequestMsg,
+  CursorPositionRequestMsg,
+  BackgroundColorRequestMsg,
+  ForegroundColorRequestMsg,
+  CursorColorRequestMsg,
+  ClipboardReadRequestMsg,
+  ClipboardSetRequestMsg,
+  CapabilityRequestMsg,
+  TerminalVersionRequestMsg,
+  ExecRequestMsg,
   ClearScreenMsg,
-  FocusMsg,
-  BlurMsg,
   BatchMsg,
   SequenceMsg,
   PrintLineMsg,
   RawMsg,
+  CapabilityMsg,
+  ModeReportMsg,
+  ModeSetting,
+  ColorProfile,
+  ColorProfileMsg,
+  MouseClickMsg,
+  MouseReleaseMsg,
+  MouseWheelMsg,
+  MouseMotionMsg,
+  View,
   MouseMode,
   ErrProgramKilled,
   ErrProgramPanic,
   ErrInterrupted,
   ProgramError,
+  EnvMsg,
 } from './types.js';
 import { type Renderer, StandardRenderer, NilRenderer } from './renderer.js';
-import { parseInput } from './input.js';
+import { InputDecoder } from './input.js';
+import { Printf as PrintfCommand, Println as PrintlnCommand } from './commands.js';
 import * as ansi from './ansi.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -46,18 +76,52 @@ const MAX_FPS = 120;
  */
 export type ProgramOption = (p: Program) => void;
 
+interface MutableProgramOptions {
+  _input: Readable | NodeJS.ReadStream | null;
+  _output: Writable | NodeJS.WriteStream;
+  _filter: ((model: Model, msg: Msg) => Msg | null) | null;
+  _fps: number;
+  _disableInput: boolean;
+  _disableRenderer: boolean;
+  _disableSignalHandler: boolean;
+  _disableCatchPanics: boolean;
+  _ignoreSignals: boolean;
+  _width: number;
+  _height: number;
+  _externalSignal: AbortSignal | null;
+  _mouseMode: MouseMode;
+  _altScreen: boolean;
+  _environment: string[];
+  _colorProfile: ColorProfile | null;
+}
+
+function mutableOptions(program: Program): MutableProgramOptions {
+  // Functional options are the sole controlled bridge to Program's private configuration.
+  return program as unknown as MutableProgramOptions;
+}
+
 /** Sets the input stream. Pass null to disable input. */
 export function WithInput(input: Readable | NodeJS.ReadStream | null): ProgramOption {
   return (p) => {
-    (p as any)._input = input;
-    if (input === null) (p as any)._disableInput = true;
+    mutableOptions(p)._input = input;
+    if (input === null) mutableOptions(p)._disableInput = true;
   };
 }
 
 /** Sets the output stream. Defaults to process.stdout. */
 export function WithOutput(output: Writable | NodeJS.WriteStream): ProgramOption {
   return (p) => {
-    (p as any)._output = output;
+    mutableOptions(p)._output = output;
+  };
+}
+
+/** Sets the environment exposed through EnvMsg and terminal capability detection. */
+export function WithEnvironment(
+  environment: readonly string[] | Readonly<Record<string, string | undefined>>,
+): ProgramOption {
+  const values = [...new EnvMsg(environment).values];
+  return (p) => {
+    mutableOptions(p)._environment = values;
   };
 }
 
@@ -67,68 +131,126 @@ export function WithOutput(output: Writable | NodeJS.WriteStream): ProgramOption
  */
 export function WithFilter(filter: (model: Model, msg: Msg) => Msg | null): ProgramOption {
   return (p) => {
-    (p as any)._filter = filter;
+    mutableOptions(p)._filter = filter;
   };
 }
 
 /** Sets a custom maximum FPS. Clamped to [1, 120]. */
 export function WithFPS(fps: number): ProgramOption {
   return (p) => {
-    (p as any)._fps = fps;
+    mutableOptions(p)._fps = fps;
   };
 }
 
 /** Disables the renderer (headless/daemon mode). */
 export function WithoutRenderer(): ProgramOption {
   return (p) => {
-    (p as any)._disableRenderer = true;
+    mutableOptions(p)._disableRenderer = true;
   };
 }
 
 /** Disables the signal handler. */
 export function WithoutSignalHandler(): ProgramOption {
   return (p) => {
-    (p as any)._disableSignalHandler = true;
+    mutableOptions(p)._disableSignalHandler = true;
+  };
+}
+
+/** Installs signal handlers but ignores SIGINT and SIGTERM. Primarily useful for tests. */
+export function WithoutSignals(): ProgramOption {
+  return (p) => {
+    mutableOptions(p)._ignoreSignals = true;
   };
 }
 
 /** Disables panic catching. */
 export function WithoutCatchPanics(): ProgramOption {
   return (p) => {
-    (p as any)._disableCatchPanics = true;
+    mutableOptions(p)._disableCatchPanics = true;
   };
 }
 
 /** Sets the initial window size. Useful for testing. */
 export function WithWindowSize(width: number, height: number): ProgramOption {
   return (p) => {
-    (p as any)._width = width;
-    (p as any)._height = height;
+    mutableOptions(p)._width = width;
+    mutableOptions(p)._height = height;
   };
 }
 
 /** Provides an AbortSignal to cancel the program from outside. */
 export function WithAbortSignal(signal: AbortSignal): ProgramOption {
   return (p) => {
-    (p as any)._externalSignal = signal;
+    mutableOptions(p)._externalSignal = signal;
   };
 }
+
+/** Upstream-compatible alias for AbortSignal-based cancellation. */
+export const WithContext = WithAbortSignal;
 
 /** Disables mouse tracking. Only meaningful if mouse mode was set via model view. */
 export function WithMouseMode(mode: MouseMode): ProgramOption {
   return (p) => {
-    (p as any)._mouseMode = mode;
+    mutableOptions(p)._mouseMode = mode;
   };
 }
 
 /** Enables alt screen mode from the start. */
 export function WithAltScreen(): ProgramOption {
   return (p) => {
-    (p as any)._altScreen = true;
+    mutableOptions(p)._altScreen = true;
   };
 }
 
+/** Forces the color profile reported to the model. */
+export function WithColorProfile(profile: ColorProfile): ProgramOption {
+  return (p) => {
+    mutableOptions(p)._colorProfile = profile;
+  };
+}
+
+
+export interface TTYStreams {
+  readonly input: ReadStream;
+  readonly output: WriteStream;
+  close(): void;
+}
+
+/** Open the controlling terminal independently of redirected stdin/stdout. */
+export function OpenTTY(): TTYStreams {
+  const inputPath = process.platform === 'win32' ? 'CONIN$' : '/dev/tty';
+  const outputPath = process.platform === 'win32' ? 'CONOUT$' : '/dev/tty';
+  const inputFd = openSync(inputPath, 'r');
+  let outputFd: number;
+  try {
+    outputFd = openSync(outputPath, 'w');
+  } catch (error) {
+    closeSync(inputFd);
+    throw error;
+  }
+
+  const input = createReadStream(inputPath, { fd: inputFd, autoClose: false });
+  const output = createWriteStream(outputPath, { fd: outputFd, autoClose: false });
+  let closed = false;
+  return {
+    input,
+    output,
+    close() {
+      if (closed) return;
+      closed = true;
+      input.destroy();
+      output.destroy();
+      closeSync(inputFd);
+      closeSync(outputFd);
+    },
+  };
+}
 // ─── Program ────────────────────────────────────────────────────────────────
+
+/** Upstream-compatible constructor helper. */
+export function NewProgram(model: Model, ...options: ProgramOption[]): Program {
+  return new Program(model, ...options);
+}
 
 /**
  * Program is the core Bubble Tea runtime. It manages the event loop,
@@ -150,18 +272,31 @@ export class Program {
   private _width = 0;
   private _height = 0;
   private _externalSignal: AbortSignal | null = null;
+  private _environment: string[] = Object.entries(process.env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => `${key}=${value}`);
+  private _colorProfile: ColorProfile | null = null;
+  private _ignoreSignals = false;
 
   // ── Runtime state ──
   private _model: Model;
   private _renderer: Renderer | null = null;
-  private _renderTimer: ReturnType<typeof setInterval> | null = null;
+  private _renderTimer: NodeJS.Timeout | null = null;
   private _running = false;
   private _killed = false;
-  private _finished: PromiseWithResolvers<void> | null = null;
+  private _finished = withResolvers<void>();
   private _previousRawMode: boolean | undefined;
   private _inputListener: ((data: Buffer) => void) | null = null;
-  private _signalHandlers: Array<[string, (...args: any[]) => void]> = [];
+  private readonly _inputDecoder = new InputDecoder();
+  private _inputFlushTimer: NodeJS.Timeout | null = null;
+  private _signalHandlers: Array<[NodeJS.Signals, () => void]> = [];
   private _abortHandler: (() => void) | null = null;
+  private _terminalReleased = false;
+  private _ignoreSignalsBeforeRelease: boolean | null = null;
+  private _cancelInteractive: (() => void) | null = null;
+  private _hasRun = false;
+  private _runGeneration = 0;
+  private _pendingMessages: Msg[] = [];
 
   // ── Message queue (replaces Go channel) ──
   private _msgQueue: Msg[] = [];
@@ -195,13 +330,19 @@ export class Program {
     if (this._running) {
       throw new ProgramError('program is already running');
     }
+    const restarting = this._hasRun;
+    if (restarting) {
+      this._finished = withResolvers<void>();
+      this._killed = false;
+      this._eventLoopError = null;
+    }
+    this._runGeneration++;
+    this._inputDecoder.reset();
     this._running = true;
-    this._killed = false;
-    this._msgQueue = [];
+    this._hasRun = true;
+    this._msgQueue = this._pendingMessages;
+    this._pendingMessages = [];
     this._msgResolve = null;
-    this._eventLoopError = null;
-
-    this._finished = withResolvers<void>();
 
     try {
       return await this._run();
@@ -216,8 +357,24 @@ export class Program {
    * Safe to call from outside the program.
    */
   send(msg: Msg): void {
-    if (!this._running || this._killed) return;
+    if (this._killed || (this._hasRun && !this._running)) return;
+    if (!this._running) {
+      this._pendingMessages.push(msg);
+      return;
+    }
     this._enqueueMsg(msg);
+  }
+
+  /** Print unmanaged output above the current view. */
+  println(...args: unknown[]): void {
+    const command = PrintlnCommand(...args);
+    if (command) this.send(command());
+  }
+
+  /** Print formatted unmanaged output above the current view. */
+  printf(template: string, ...args: unknown[]): void {
+    const command = PrintfCommand(template, ...args);
+    if (command) this.send(command());
   }
 
   /**
@@ -232,6 +389,7 @@ export class Program {
    */
   kill(): void {
     this._killed = true;
+    this._cancelInteractive?.();
     // Don't overwrite a more specific error (e.g. ErrProgramPanic)
     if (!this._eventLoopError) {
       this._eventLoopError = ErrProgramKilled;
@@ -247,10 +405,34 @@ export class Program {
    * Wait blocks until the program finishes running.
    */
   async wait(): Promise<void> {
-    if (this._finished) {
-      await this._finished.promise;
-    }
+    await this._finished.promise;
   }
+
+  /** Release raw mode and terminal ownership for an interactive subprocess. */
+  releaseTerminal(): void {
+    if (!this._running || this._terminalReleased) return;
+    this._ignoreSignalsBeforeRelease = this._ignoreSignals;
+    this._ignoreSignals = true;
+    this._stopRenderer(false);
+    this._teardownInputReader();
+    this._exitRawMode();
+    this._terminalReleased = true;
+  }
+
+  /** Restore terminal ownership after releaseTerminal(). */
+  restoreTerminal(): void {
+    if (!this._running || !this._terminalReleased) return;
+    this._ignoreSignals = this._ignoreSignalsBeforeRelease ?? this._ignoreSignals;
+    this._ignoreSignalsBeforeRelease = null;
+    this._enterRawMode();
+    this._setupInputReader();
+    this._startRenderer();
+    this._renderer?.repaint();
+    this._renderer?.flush(false);
+    this._terminalReleased = false;
+    this._refreshTerminalSize();
+  }
+
 
   // ── Internal: Main run sequence ─────────────────────────────────────────
 
@@ -277,10 +459,6 @@ export class Program {
         this._height,
       );
       this._renderer = r;
-
-      if (this._altScreen) {
-        r.enterAltScreen();
-      }
     }
 
     // Enter raw mode
@@ -292,17 +470,16 @@ export class Program {
     // Set up input reader
     this._setupInputReader();
 
-    // Enable mouse if requested
-    this._enableMouse();
 
-    // Enable bracketed paste + focus reporting
-    this._enableTerminalFeatures();
-
-    // Start the renderer ticker
+    // Start rendering, then publish the startup reports Bubble Tea guarantees.
     this._startRenderer();
-
-    // Send initial WindowSizeMsg
+    if (!this._disableRenderer && shouldQuerySynchronizedOutput(this._environment)) {
+      this._writeToOutput(ansi.requestSyncOutputMode + ansi.requestUnicodeCoreMode);
+    }
+    this._colorProfile ??= detectColorProfile(this._environment);
+    this._enqueueMsg(new ColorProfileMsg(this._colorProfile));
     this._enqueueMsg(new WindowSizeMsg(this._width, this._height));
+    this._enqueueMsg(new EnvMsg(this._environment));
 
     // Initialize model
     let model = this._initialModel;
@@ -331,7 +508,6 @@ export class Program {
     if (!killed) {
       // Final render on graceful exit
       this._render(model);
-      this._renderer?.flush(true);
     }
 
     // Cleanup
@@ -354,7 +530,7 @@ export class Program {
       const msg = await this._dequeueMsg();
       if (msg === undefined || this._killed) break;
 
-      const result = this._processMsg(model, msg);
+      const result = await this._processMsg(model, msg);
       if (result === null) continue; // filtered out
 
       if (result.done) {
@@ -377,10 +553,10 @@ export class Program {
     return model;
   }
 
-  private _processMsg(
+  private async _processMsg(
     model: Model,
     msg: Msg,
-  ): { model: Model; cmd: Cmd; done: boolean; error?: Error } | null {
+  ): Promise<{ model: Model; cmd: Cmd; done: boolean; error?: Error } | null> {
     // Apply filter
     if (this._filter) {
       const filtered = this._filter(model, msg);
@@ -397,12 +573,71 @@ export class Program {
     }
     if (msg instanceof SuspendMsg) {
       this._suspend();
-      return null; // don't pass to model
     }
     if (msg instanceof WindowSizeMsg) {
       this._renderer?.resize(msg.width, msg.height);
       this._width = msg.width;
       this._height = msg.height;
+    }
+    if (msg instanceof WindowSizeRequestMsg) {
+      const size = this._reportedTerminalSize();
+      if (size) this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
+      else this._writeToOutput(ansi.requestWindowSize);
+    }
+    if (msg instanceof CursorPositionRequestMsg) {
+      this._writeToOutput(ansi.requestCursorPosition);
+    }
+    if (msg instanceof BackgroundColorRequestMsg) {
+      this._writeToOutput(ansi.requestBackgroundColor);
+    }
+    if (msg instanceof ForegroundColorRequestMsg) {
+      this._writeToOutput(ansi.requestForegroundColor);
+    }
+    if (msg instanceof CursorColorRequestMsg) {
+      this._writeToOutput(ansi.requestCursorColor);
+    }
+    if (msg instanceof ClipboardReadRequestMsg) {
+      this._writeToOutput(ansi.requestClipboard(msg.selection));
+    }
+    if (msg instanceof ClipboardSetRequestMsg) {
+      this._writeToOutput(ansi.setClipboard(msg.selection, msg.content));
+    }
+    if (msg instanceof CapabilityRequestMsg) {
+      this._writeToOutput(ansi.requestTermcap(msg.capability));
+    }
+    if (msg instanceof TerminalVersionRequestMsg) {
+      this._writeToOutput(ansi.requestTerminalVersion);
+    }
+    if (msg instanceof ExecRequestMsg) {
+      await this._executeInteractive(msg.command, msg.callback);
+    }
+    if (msg instanceof CapabilityMsg && (msg.content === 'RGB' || msg.content === 'Tc')) {
+      if (this._colorProfile !== ColorProfile.TrueColor) {
+        this._colorProfile = ColorProfile.TrueColor;
+        this._enqueueMsg(new ColorProfileMsg(this._colorProfile));
+      }
+    }
+    if (
+      msg instanceof ModeReportMsg &&
+      msg.mode === 2026 &&
+      msg.value === ModeSetting.Reset
+    ) {
+      this._renderer?.setSynchronizedOutput?.(true);
+    }
+    if (
+      msg instanceof MouseClickMsg ||
+      msg instanceof MouseReleaseMsg ||
+      msg instanceof MouseWheelMsg ||
+      msg instanceof MouseMotionMsg
+    ) {
+      try {
+        const cmd = this._renderer?.onMouse?.(msg);
+        if (cmd) this._executeCmd(cmd);
+      } catch (error) {
+        if (this._disableCatchPanics) throw error;
+        this._recoverFromPanic(error);
+        return { model, cmd: null, done: true, error: ErrProgramPanic };
+      }
     }
     if (msg instanceof ClearScreenMsg) {
       this._renderer?.clearScreen();
@@ -411,7 +646,7 @@ export class Program {
       this._renderer?.insertAbove(msg.body);
     }
     if (msg instanceof RawMsg) {
-      this._writeToOutput(msg.data);
+      this._writeToOutput(String(msg.data));
     }
 
     // Handle BatchMsg and SequenceMsg (don't pass to model)
@@ -467,100 +702,129 @@ export class Program {
 
   private _executeCmd(cmd: Cmd): void {
     if (!cmd) return;
+    const generation = this._runGeneration;
 
-    // Execute the command asynchronously (like a goroutine)
+    // Execute the command asynchronously (like a goroutine).
     const run = async () => {
       try {
         const result = cmd();
-        if (result instanceof Promise) {
-          const msg = await result;
-          this.send(msg);
-        } else {
-          this.send(result);
-        }
-      } catch (e) {
-        if (!this._disableCatchPanics) {
-          this._recoverFromPanic(e);
-        } else {
-          throw e;
-        }
+        const msg = result instanceof Promise ? await result : result;
+        if (generation === this._runGeneration && this._running) this.send(msg);
+      } catch (error) {
+        if (generation !== this._runGeneration || !this._running) return;
+        this._failAsyncCommand(error);
       }
     };
-    run();
+    void run();
+  }
+  private _execBatchMsg(msg: BatchMsg): void {
+    const generation = this._runGeneration;
+    void this._execBatchMsgAsync(msg, generation).catch((error) => {
+      if (generation === this._runGeneration && this._running) this._failAsyncCommand(error);
+    });
   }
 
-  private _execBatchMsg(msg: BatchMsg): void {
-    // Execute all commands concurrently (like Go's WaitGroup pattern)
+  private async _execBatchMsgAsync(msg: BatchMsg, generation: number): Promise<void> {
+    await Promise.all(
+      msg.cmds
+        .filter((cmd): cmd is NonNullable<Cmd> => cmd != null)
+        .map((cmd) => this._executeNestedCommand(cmd, generation)),
+    );
+  }
+  private _execSequenceMsg(msg: SequenceMsg): void {
+    const generation = this._runGeneration;
+    void this._execSequenceMsgAsync(msg, generation).catch((error) => {
+      if (generation === this._runGeneration && this._running) this._failAsyncCommand(error);
+    });
+  }
+
+  private async _execSequenceMsgAsync(msg: SequenceMsg, generation: number): Promise<void> {
     for (const cmd of msg.cmds) {
-      if (!cmd) continue;
-
-      const run = async () => {
-        try {
-          const result = cmd();
-          const resolved = result instanceof Promise ? await result : result;
-
-          if (resolved instanceof BatchMsg) {
-            this._execBatchMsg(resolved);
-          } else if (resolved instanceof SequenceMsg) {
-            this._execSequenceMsg(resolved);
-          } else {
-            this.send(resolved);
-          }
-        } catch (e) {
-          if (!this._disableCatchPanics) {
-            this._recoverFromPanic(e);
-          }
-        }
-      };
-      run();
+      if (!cmd || generation !== this._runGeneration || !this._running) continue;
+      await this._executeNestedCommand(cmd, generation);
+      if (this._killed) return;
     }
   }
 
-  private _execSequenceMsg(msg: SequenceMsg): void {
-    // Execute commands one at a time, in order
-    const run = async () => {
-      for (const cmd of msg.cmds) {
-        if (!cmd) continue;
-        try {
-          const result = cmd();
-          const resolved = result instanceof Promise ? await result : result;
-
-          if (resolved instanceof BatchMsg) {
-            this._execBatchMsg(resolved);
-          } else if (resolved instanceof SequenceMsg) {
-            // Recursive, but sequential
-            await this._execSequenceMsgAsync(resolved);
-          } else {
-            this.send(resolved);
-          }
-        } catch (e) {
-          if (!this._disableCatchPanics) {
-            this._recoverFromPanic(e);
-          }
-        }
+  private async _executeNestedCommand(
+    cmd: NonNullable<Cmd>,
+    generation: number,
+  ): Promise<void> {
+    try {
+      const result = cmd();
+      const resolved = result instanceof Promise ? await result : result;
+      if (generation !== this._runGeneration || !this._running) return;
+      if (resolved instanceof BatchMsg) {
+        await this._execBatchMsgAsync(resolved, generation);
+      } else if (resolved instanceof SequenceMsg) {
+        await this._execSequenceMsgAsync(resolved, generation);
+      } else {
+        this.send(resolved);
       }
-    };
-    run();
+    } catch (error) {
+      if (generation !== this._runGeneration || !this._running) return;
+      if (this._disableCatchPanics) throw error;
+      this._recoverFromPanic(error);
+    }
   }
 
-  private async _execSequenceMsgAsync(msg: SequenceMsg): Promise<void> {
-    for (const cmd of msg.cmds) {
-      if (!cmd) continue;
-      try {
-        const result = cmd();
-        const resolved = result instanceof Promise ? await result : result;
+  private _failAsyncCommand(error: unknown): void {
+    if (!this._disableCatchPanics) {
+      this._recoverFromPanic(error);
+      return;
+    }
+    this._eventLoopError = error instanceof Error ? error : new Error(String(error));
+    this.kill();
+  }
 
-        if (resolved instanceof BatchMsg) {
-          this._execBatchMsg(resolved);
-        } else if (resolved instanceof SequenceMsg) {
-          await this._execSequenceMsgAsync(resolved);
-        } else {
-          this.send(resolved);
-        }
-      } catch (e) {
-        if (!this._disableCatchPanics) {
-          this._recoverFromPanic(e);
-        }
+  private async _executeInteractive(
+    command: ExecCommand,
+    callback: ExecCallback | null,
+  ): Promise<void> {
+    this.releaseTerminal();
+    const interrupted = withResolvers<void>();
+    let cancelled = false;
+    this._cancelInteractive = () => {
+      cancelled = true;
+      try {
+        command.cancel?.();
+      } catch {
+        // Cancellation is best-effort; killing Program must still unblock Run.
+      } finally {
+        interrupted.resolve();
+      }
+    };
+
+    command.setStdin(this._input);
+    command.setStdout(this._output);
+    command.setStderr(process.stderr);
+    const execution = Promise.resolve()
+      .then(() => {
+        if (cancelled || this._killed) return;
+        return command.run();
+      })
+      .then(
+        () => ({ cancelled: false as const, error: null }),
+        (cause: unknown) => ({
+          cancelled: false as const,
+          error: cause instanceof Error ? cause : new Error(String(cause)),
+        }),
+      );
+    const cancellation = interrupted.promise.then(() => ({
+      cancelled: true as const,
+      error: null,
+    }));
+    const outcome = await Promise.race([execution, cancellation]);
+    this._cancelInteractive = null;
+    if (outcome.cancelled || this._killed) return;
+
+    this.restoreTerminal();
+    if (callback) {
+      try {
+        this._enqueueMsg(callback(outcome.error));
+      } catch (cause) {
+        if (this._disableCatchPanics) throw cause;
+        this._recoverFromPanic(cause);
       }
     }
   }
@@ -568,9 +832,19 @@ export class Program {
   // ── Rendering ─────────────────────────────────────────────────────────
 
   private _render(model: Model): void {
-    if (this._renderer) {
-      this._renderer.render(model.view());
+    if (!this._renderer) return;
+    const rendered = model.view();
+    if (typeof rendered === 'string') {
+      const view = new View(rendered);
+      view.altScreen = this._altScreen;
+      view.mouseMode = this._mouseMode;
+      this._renderer.render(view);
+      return;
     }
+    const view = rendered.clone();
+    if (this._altScreen) view.altScreen = true;
+    if (this._mouseMode !== MouseMode.None) view.mouseMode = this._mouseMode;
+    this._renderer.render(view);
   }
 
   private _startRenderer(): void {
@@ -606,12 +880,16 @@ export class Program {
 
   // ── Terminal management ───────────────────────────────────────────────
 
-  private _getTerminalSize(): { width: number; height: number } {
+  private _reportedTerminalSize(): { width: number; height: number } | null {
     const out = this._output as NodeJS.WriteStream;
     if (out && typeof out.columns === 'number' && typeof out.rows === 'number') {
       return { width: out.columns, height: out.rows };
     }
-    return { width: 80, height: 24 };
+    return null;
+  }
+
+  private _getTerminalSize(): { width: number; height: number } {
+    return this._reportedTerminalSize() ?? { width: 80, height: 24 };
   }
 
   private _enterRawMode(): void {
@@ -639,12 +917,14 @@ export class Program {
     const input = this._input;
 
     this._inputListener = (data: Buffer) => {
-      const msgs = parseInput(data);
-      for (const msg of msgs) {
-        this._enqueueMsg(msg);
-      }
+      clearTimeout(this._inputFlushTimer ?? undefined);
+      for (const msg of this._inputDecoder.feed(data)) this._enqueueMsg(msg);
+      this._inputFlushTimer = setTimeout(() => {
+        for (const msg of this._inputDecoder.flush()) this._enqueueMsg(msg);
+        this._inputFlushTimer = null;
+      }, 10);
+      this._inputFlushTimer.unref?.();
     };
-
     input.on('data', this._inputListener);
 
     // Resume the stream if paused
@@ -659,50 +939,17 @@ export class Program {
       this._inputListener = null;
     }
 
-    // Pause stdin if it's process.stdin to not keep the process alive
+    if (this._inputFlushTimer) {
+      clearTimeout(this._inputFlushTimer);
+      this._inputFlushTimer = null;
+    }
+    // Input fragments never cross terminal ownership or run boundaries.
+    this._inputDecoder.reset();
     if (this._input === process.stdin) {
       process.stdin.pause();
     }
   }
 
-  private _enableMouse(): void {
-    if (this._mouseMode === MouseMode.None) return;
-
-    let seq = '';
-    if (this._mouseMode === MouseMode.AllMotion) {
-      seq = ansi.enableMouseAllMotion + ansi.enableMouseSGR;
-    } else if (this._mouseMode === MouseMode.CellMotion) {
-      seq = ansi.enableMouseCellMotion + ansi.enableMouseSGR;
-    }
-    this._writeToOutput(seq);
-  }
-
-  private _disableMouse(): void {
-    if (this._mouseMode === MouseMode.None) return;
-
-    let seq = '';
-    if (this._mouseMode === MouseMode.AllMotion) {
-      seq = ansi.disableMouseAllMotion + ansi.disableMouseSGR;
-    } else if (this._mouseMode === MouseMode.CellMotion) {
-      seq = ansi.disableMouseCellMotion + ansi.disableMouseSGR;
-    }
-    this._writeToOutput(seq);
-  }
-
-  private _enableTerminalFeatures(): void {
-    let seq = '';
-    seq += ansi.enableBracketedPaste;
-    seq += ansi.enableFocusReporting;
-    this._writeToOutput(seq);
-  }
-
-  private _disableTerminalFeatures(): void {
-    let seq = '';
-    seq += ansi.disableBracketedPaste;
-    seq += ansi.disableFocusReporting;
-    seq += ansi.showCursor;
-    this._writeToOutput(seq);
-  }
 
   private _writeToOutput(s: string): void {
     if (s.length > 0) {
@@ -713,51 +960,51 @@ export class Program {
   // ── Signal handling ───────────────────────────────────────────────────
 
   private _setupSignalHandlers(): void {
-    // Process signal handlers (SIGINT, SIGTERM, SIGWINCH) are gated by
-    // _disableSignalHandler, but the external AbortSignal is always
-    // honoured — matching Go's behaviour where context cancellation
-    // is independent of WithoutSignalHandler().
-    if (!this._disableSignalHandler) {
-      // SIGINT → InterruptMsg
-      const onSigint = () => {
-        this._enqueueMsg(new InterruptMsg());
-      };
-      process.on('SIGINT', onSigint);
-      this._signalHandlers.push(['SIGINT', onSigint]);
-
-      // SIGTERM → QuitMsg
-      const onSigterm = () => {
-        this._enqueueMsg(new QuitMsg());
-      };
-      process.on('SIGTERM', onSigterm);
-      this._signalHandlers.push(['SIGTERM', onSigterm]);
-
-      // SIGWINCH → resize
-      if (process.platform !== 'win32') {
-        const onResize = () => {
-          const size = this._getTerminalSize();
-          this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
-        };
-        process.on('SIGWINCH', onResize);
-        this._signalHandlers.push(['SIGWINCH', onResize]);
-      }
-    }
-
-    // External abort signal — always registered regardless of
-    // _disableSignalHandler (mirrors Go's context.Context behaviour)
+    this._setupProcessSignalHandlers();
     if (this._externalSignal) {
       this._abortHandler = () => {
-        this._killed = true;
-        if (!this._eventLoopError) {
-          this._eventLoopError = ErrProgramKilled;
-        }
-        if (this._msgResolve) {
-          this._msgResolve();
-          this._msgResolve = null;
-        }
+        this.kill();
       };
       this._externalSignal.addEventListener('abort', this._abortHandler);
+      if (this._externalSignal.aborted) this._abortHandler();
     }
+  }
+
+  private _setupProcessSignalHandlers(): void {
+    if (this._signalHandlers.length > 0) return;
+    if (!this._disableSignalHandler) {
+      const onSigint = () => {
+        if (!this._ignoreSignals) this._enqueueMsg(new InterruptMsg());
+      };
+      const onSigterm = () => {
+        if (!this._ignoreSignals) this._enqueueMsg(new QuitMsg());
+      };
+      process.on('SIGINT', onSigint);
+      process.on('SIGTERM', onSigterm);
+      this._signalHandlers.push(['SIGINT', onSigint], ['SIGTERM', onSigterm]);
+    }
+    if (!this._disableSignalHandler && process.platform !== 'win32') {
+      const onResize = () => {
+        if (this._ignoreSignals) return;
+        const size = this._getTerminalSize();
+        this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
+      };
+      process.on('SIGWINCH', onResize);
+      this._signalHandlers.push(['SIGWINCH', onResize]);
+    }
+  }
+
+  private _refreshTerminalSize(): void {
+    const size = this._reportedTerminalSize();
+    if (!size) {
+      this._writeToOutput(ansi.requestWindowSize);
+      return;
+    }
+    if (size.width === this._width && size.height === this._height) return;
+    this._width = size.width;
+    this._height = size.height;
+    this._renderer?.resize(size.width, size.height);
+    this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
   }
 
   private _teardownSignalHandlers(): void {
@@ -775,45 +1022,15 @@ export class Program {
   // ── Suspend / Resume ──────────────────────────────────────────────────
 
   private _suspend(): void {
-    // Only supported on Unix
     if (process.platform === 'win32') return;
 
-    // Release terminal
-    this._stopRenderer(false);
-    this._disableMouse();
-    this._disableTerminalFeatures();
-
-    const renderer = this._renderer as StandardRenderer;
-    if (renderer && typeof renderer.exitAltScreen === 'function') {
-      renderer.exitAltScreen();
-    }
-
-    this._teardownInputReader();
-    this._exitRawMode();
-
-    // Send SIGTSTP to suspend the process
-    process.kill(process.pid, 'SIGTSTP');
-
-    // When we resume, restore everything
-    // Use SIGCONT to detect resume
+    this.releaseTerminal();
     const onResume = () => {
-      process.removeListener('SIGCONT', onResume);
-
-      this._enterRawMode();
-      this._setupInputReader();
-      this._enableTerminalFeatures();
-      this._enableMouse();
-
-      if (this._altScreen && renderer && typeof renderer.enterAltScreen === 'function') {
-        renderer.enterAltScreen();
-      }
-
-      this._startRenderer();
-      this._renderer?.repaint();
-
+      this.restoreTerminal();
       this._enqueueMsg(new ResumeMsg());
     };
-    process.on('SIGCONT', onResume);
+    process.once('SIGCONT', onResume);
+    process.kill(process.pid, 'SIGTSTP');
   }
 
   // ── Panic recovery ────────────────────────────────────────────────────
@@ -833,27 +1050,16 @@ export class Program {
   // ── Shutdown ──────────────────────────────────────────────────────────
 
   private _shutdown(killed: boolean): void {
-    // Tear down signal handlers
     this._teardownSignalHandlers();
-
-    // Tear down input
     this._teardownInputReader();
 
-    // Disable terminal features
-    this._disableMouse();
-    this._disableTerminalFeatures();
-
-    // Exit alt screen if needed
-    const renderer = this._renderer as StandardRenderer;
-    if (renderer && typeof renderer.exitAltScreen === 'function' && renderer.isAltScreen) {
-      renderer.exitAltScreen();
-    }
-
-    // Stop renderer
     this._stopRenderer(killed);
-
-    // Restore terminal state
     this._exitRawMode();
+    if (this._ignoreSignalsBeforeRelease !== null) {
+      this._ignoreSignals = this._ignoreSignalsBeforeRelease;
+      this._ignoreSignalsBeforeRelease = null;
+    }
+    this._terminalReleased = false;
   }
 }
 
@@ -862,7 +1068,7 @@ export class Program {
 /** Polyfill for Promise.withResolvers (Node 22+) */
 function withResolvers<T>(): PromiseWithResolvers<T> {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: any) => void;
+  let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
@@ -870,8 +1076,31 @@ function withResolvers<T>(): PromiseWithResolvers<T> {
   return { promise, resolve, reject };
 }
 
+
+function detectColorProfile(environment: readonly string[]): ColorProfile {
+  const env = new EnvMsg(environment);
+  if (env.lookupEnv('NO_COLOR')[1] || env.getenv('TERM') === 'dumb') return ColorProfile.Ascii;
+  const colorTerm = env.getenv('COLORTERM').toLowerCase();
+  if (colorTerm === 'truecolor' || colorTerm === '24bit') return ColorProfile.TrueColor;
+  if (env.getenv('TERM').includes('256color')) return ColorProfile.ANSI256;
+  return ColorProfile.ANSI;
+}
 interface PromiseWithResolvers<T> {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: any) => void;
+  reject: (reason?: unknown) => void;
+}
+
+function shouldQuerySynchronizedOutput(environment: readonly string[]): boolean {
+  const env = new EnvMsg(environment);
+  const term = env.getenv('TERM').toLowerCase();
+  const [termProgram, hasTermProgram] = env.lookupEnv('TERM_PROGRAM');
+  const hasSshTty = env.lookupEnv('SSH_TTY')[1];
+  const hasWindowsTerminal = env.lookupEnv('WT_SESSION')[1];
+  return (
+    (!hasTermProgram && !hasSshTty) ||
+    hasWindowsTerminal ||
+    (hasTermProgram && !termProgram.includes('Apple') && !hasSshTty) ||
+    ['ghostty', 'wezterm', 'alacritty', 'kitty', 'rio'].some((name) => term.includes(name))
+  );
 }

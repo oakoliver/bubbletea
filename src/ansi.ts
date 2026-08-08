@@ -116,3 +116,39 @@ export const eraseChars = (n = 1) => `${CSI}${n}X`;
 // ─── Color / Style Reset ───────────────────────────────────────────────────
 
 export const resetStyle = `${CSI}0m`;
+
+// ─── View state and terminal reports ────────────────────────────────────────
+
+export const requestWindowSize = `${CSI}18t`;
+export const requestBackgroundColor = `${OSC}11;?${ST}`;
+export const requestForegroundColor = `${OSC}10;?${ST}`;
+export const requestCursorColor = `${OSC}12;?${ST}`;
+export const requestTerminalVersion = `${CSI}>q`;
+
+export const setWindowTitle = (title: string) => `${OSC}2;${title}${ST}`;
+export const setForegroundColor = (color: string) => `${OSC}10;${color}${ST}`;
+export const setBackgroundColor = (color: string) => `${OSC}11;${color}${ST}`;
+export const setCursorColor = (color: string) => `${OSC}12;${color}${ST}`;
+export const resetForegroundColor = `${OSC}110${ST}`;
+export const resetBackgroundColor = `${OSC}111${ST}`;
+export const resetCursorColor = `${OSC}112${ST}`;
+export const resetCursorShape = `${CSI}0 q`;
+export const resetWindowTitle = setWindowTitle('');
+
+export const requestClipboard = (selection: 'c' | 'p') => `${OSC}52;${selection};?${ST}`;
+export const setClipboard = (selection: 'c' | 'p', content: string) =>
+  `${OSC}52;${selection};${Buffer.from(content).toString('base64')}${ST}`;
+
+export const requestTermcap = (capability: string) => {
+  const hex = Buffer.from(capability).toString('hex').toUpperCase();
+  return `${DCS}+q${hex}${ST}`;
+};
+
+export const setModifyOtherKeys2 = `${CSI}>4;2m`;
+export const resetModifyOtherKeys = `${CSI}>4m`;
+export const requestKittyKeyboard = `${CSI}?u`;
+export const kittyKeyboard = (flags: number, mode = 1) => `${CSI}>${flags};${mode}u`;
+
+export const setProgressBar = (state: number, value: number) =>
+  `${OSC}9;4;${state};${value}${ST}`;
+export const resetProgressBar = `${OSC}9;4;0;0${ST}`;

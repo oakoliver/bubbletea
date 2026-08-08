@@ -1,6 +1,6 @@
 # @oakoliver/bubbletea
 
-Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero dependencies.
+Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.1.0 targets API and behavior parity with upstream **Bubble Tea v2.0.8**.
 
 ## Features
 
@@ -12,6 +12,26 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 - External cancellation via `AbortSignal`
 - Raw mode management, SIGINT/SIGTERM/SIGWINCH handling
 - Works on Node.js and Bun
+
+## Upstream v2.0.8 Surface Map
+
+The TypeScript API keeps its established camel-case lifecycle (`init`, `update`, `view`, `run`, `send`) while mapping the complete portable v2.0.8 surface:
+
+| Upstream Bubble Tea | TypeScript surface |
+| --- | --- |
+| `Model`, `Msg`, `Cmd`, `NewProgram`, `Program.Run/Send/Quit/Kill/Wait` | `Model`, `Msg`, `Cmd`, `NewProgram`, `Program.run/send/quit/kill/wait` |
+| `View`, `NewView`, `View.SetContent`, `Cursor`, `NewCursor`, `ProgressBar`, `NewProgressBar` | `View`, `NewView`, `View.setContent`, `Cursor`, `NewCursor`, `ProgressBar`, `NewProgressBar` |
+| View alt-screen, mouse, focus, paste, keyboard-enhancement, title, color, cursor, and progress fields | Corresponding camel-case `View` fields; string-returning legacy models remain supported |
+| `Key`, `KeyMsg`, press/release messages, modifiers, special/Kitty key constants | `Key`, `KeyMsg`, `KeyPressMsg`, `KeyReleaseMsg`, `KeyMod`, `KeyCode`, `ExtendedKeyCode` |
+| `Mouse`, `MouseMsg`, button and click/release/wheel/motion messages | `Mouse`, `MouseMsg`, `MouseButton`, and the four concrete message classes |
+| Focus, paste, window, cursor, mode, color, clipboard, capability, terminal-version, environment, and color-profile reports | Same message names with camel-case fields and methods |
+| `Batch`, `Sequence`, `Tick`, `Every`, `Quit`, `Interrupt`, `Suspend`, `ClearScreen`, `Raw`, `Println`, `Printf` | Same exported command names |
+| Window/cursor/color/capability/version/clipboard requests | Same exported request and clipboard command names |
+| `Exec`, `ExecProcess`, `ExecCommand`, `ExecCallback` | Same concepts; `ExecProcess(command, args, callback)` creates a Node/Bun child process after terminal release |
+| `WithContext`, environment/output/input/filter/FPS/profile/window options, signal/panic/renderer options | Same option names; `WithContext` and `WithAbortSignal` accept `AbortSignal` |
+| `OpenTTY`, terminal release/restore, program printing | `OpenTTY`, `Program.releaseTerminal/restoreTerminal/println/printf` |
+
+The only omitted exported upstream APIs are `LogOptionsSetter`, `LogToFile`, and `LogToFileWith`. They configure Go's process-wide `log.Default()` object and return an `*os.File`; Node and Bun have no equivalent process-wide logger contract to mutate. Use a Node/Bun logger with an append-mode file stream instead. Terminal suspension remains unavailable on Windows, matching upstream's own `suspendSupported` platform gate.
 
 ## Install
 
@@ -64,7 +84,7 @@ Every Bubbletea program revolves around three methods on a `Model`:
 
 1. **`init()`** — Returns an optional command to run at startup.
 2. **`update(msg)`** — Receives a message, returns the new model and an optional command.
-3. **`view()`** — Returns the current UI as a string.
+3. **`view()`** — Returns the current UI as a string or a declarative `View`.
 
 Messages (`Msg`) flow through the event loop. Commands (`Cmd`) are functions that produce messages asynchronously.
 
@@ -194,6 +214,8 @@ ac.abort(); // Program exits with ErrProgramKilled
 - `program.quit(): void` — Send a `QuitMsg`.
 - `program.kill(): void` — Immediately kill the program.
 - `program.wait(): Promise<void>` — Wait until the program finishes.
+- `program.releaseTerminal()` / `program.restoreTerminal()` — Temporarily hand terminal ownership to an interactive process.
+- `program.println(...)` / `program.printf(...)` — Print unmanaged lines above an inline view.
 
 ### Command Helpers
 
@@ -201,7 +223,7 @@ ac.abort(); // Program exits with ErrProgramKilled
 - `Batch(...cmds): Cmd` — Run commands concurrently.
 - `Sequence(...cmds): Cmd` — Run commands in order.
 - `Tick(durationMs, fn): Cmd` — Fire after a delay.
-- `Every(intervalMs, fn): Cmd` — Fire repeatedly.
+- `Every(intervalMs, fn): Cmd` — Fire once at the next wall-clock interval boundary; schedule it again from `update` for repetition.
 
 ### Message Types
 
@@ -213,6 +235,9 @@ ac.abort(); // Program exits with ErrProgramKilled
 - `InterruptMsg` — Ctrl+C / SIGINT
 - `SuspendMsg` / `ResumeMsg` — Process suspend/resume
 - `ClearScreenMsg` / `PrintLineMsg` — Renderer control
+- `EnvMsg` / `ColorProfileMsg` — Startup environment and detected/forced color profile
+- `KeyboardEnhancementsMsg` / `ModeReportMsg` — Terminal protocol capability reports
+- `ClipboardMsg` / color messages / `CapabilityMsg` / `TerminalVersionMsg` — Query responses
 
 ### Errors
 

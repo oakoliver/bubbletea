@@ -51,6 +51,46 @@ import {
   Batch,
   Sequence,
 } from '../src/index.js';
+import {
+  type ExecCommand,
+  ansi,
+  ExtendedKeyCode,
+  KeyExtended,
+  BackgroundColorMsg,
+  CapabilityMsg,
+  ClipboardMsg,
+  ClipboardSetRequestMsg,
+  ColorProfile,
+  ColorProfileMsg,
+  Cursor,
+  CursorShape,
+  EnvMsg,
+  Exec,
+  InputDecoder,
+  KeyReleaseMsg,
+  KeyboardEnhancementsMsg,
+  ModeReportMsg,
+  ModeSetting,
+  MouseButton,
+  PasteMsg,
+  MouseMotionMsg,
+  MouseMode,
+  NewCursor,
+  NewProgressBar,
+  NewView,
+  ProgressBarState,
+  Raw,
+  Printf,
+  RawMsg,
+  parseInput,
+  StandardRenderer,
+  RequestWindowSize,
+  SetClipboard,
+  TerminalVersionMsg,
+  View,
+  WithColorProfile,
+  WithEnvironment,
+} from '../src/index.js';
 
 // ─── Helper: wait until condition ───────────────────────────────────────────
 
@@ -633,6 +673,11 @@ describe('Input parser', () => {
 });
 
 describe('Commands', () => {
+  test('Printf supports Go-style numeric width, precision, quoting and percent escaping', () => {
+    const msg = Printf('%04d %.2f %q %X %%', 7, 1.25, 'tea', 255)!();
+    expect(msg.body).toBe('0007 1.25 "tea" FF %');
+  });
+
   test('Batch with no commands returns null', () => {
     const cmd = Batch();
     expect(cmd).toBeNull();
@@ -687,6 +732,36 @@ import { Tick, Every } from '../src/commands.js';
 import { NilRenderer } from '../src/renderer.js';
 
 describe('Go Parity: commands_test.go', () => {
+  test('Tick and Every schedule only when their Cmd executes', async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalNow = Date.now;
+    const delays: number[] = [];
+    globalThis.setTimeout = ((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      delays.push(Number(delay ?? 0));
+      queueMicrotask(() => handler(...args));
+      return 0 as unknown as NodeJS.Timeout;
+    }) as typeof setTimeout;
+    try {
+      Date.now = () => 1250;
+      const tick = Tick(25, () => 'tick');
+      const every = Every(1000, () => 'every');
+      await Promise.resolve();
+      expect(delays).toEqual([]);
+
+      Date.now = () => 1500;
+      await tick!();
+      await every!();
+      expect(delays).toEqual([25, 500]);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      Date.now = originalNow;
+    }
+  });
+
   // TestEvery: Verifies Every command returns the expected message after firing
   test('TestEvery — returns expected msg', async () => {
     const expected = 'every ms';
@@ -966,6 +1041,8 @@ describe('Go Parity: options_test.go — TestOptions', () => {
   // We test that the program doesn't respond to signals when disabled.
   // This is inherently hard to test in unit tests, so we verify the option doesn't throw.
   test('without signals — WithoutSignalHandler option works', async () => {
+    const sigintListeners = process.listenerCount('SIGINT');
+    const resizeListeners = process.listenerCount('SIGWINCH');
     const m = new TestModel();
     const p = new Program(
       m,
@@ -983,8 +1060,10 @@ describe('Go Parity: options_test.go — TestOptions', () => {
       }
     }, 1);
 
-    // Should complete without error
-    await p.run();
+    const running = p.run();
+    expect(process.listenerCount('SIGINT')).toBe(sigintListeners);
+    expect(process.listenerCount('SIGWINCH')).toBe(resizeListeners);
+    await running;
     clearInterval(poll);
     expect(m.executed).toBe(true);
   });
@@ -1163,4 +1242,777 @@ describe('Go Parity: options_test.go — TestOptions', () => {
       expect(m.executed).toBe(true);
     });
   });
+});
+
+describe('Bubble Tea v2.0.8 parity surface', () => {
+  test('View, Cursor and ProgressBar preserve declarative render state', () => {
+    const cursor = NewCursor(3, 4);
+
+    expect(cursor).toBeInstanceOf(Cursor);
+    expect(cursor.blink).toBe(true);
+
+    const view = NewView('content');
+    view.cursor = cursor;
+    view.altScreen = true;
+    view.reportFocus = true;
+    view.mouseMode = MouseMode.CellMotion;
+    view.keyboardEnhancements.reportEventTypes = true;
+    view.progressBar = NewProgressBar(ProgressBarState.Default, 120);
+
+    expect(view).toBeInstanceOf(View);
+    expect(view.content).toBe('content');
+    expect(view.progressBar.value).toBe(100);
+    expect(view.clone()).not.toBe(view);
+    expect(view.clone().cursor).not.toBe(cursor);
+  });
+
+  test('Program println and printf persist unmanaged output', async () => {
+    class PrintModel implements Model {
+      init(): Cmd {
+        return Quit;
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const program = new Program(
+      new PrintModel(),
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    );
+    program.println('value=', 7);
+    program.printf(' hex=%02X', 15);
+    await program.run();
+    expect(rendered).toContain('value=7');
+    expect(rendered).toContain(' hex=0F');
+  });
+
+  test('key formatting distinguishes String from Keystroke and release events', () => {
+    const shifted = new KeyPressMsg({
+      text: '?',
+      code: '/'.codePointAt(0)!,
+      shiftedCode: '?'.codePointAt(0),
+      mod: KeyMod.Shift,
+    });
+    expect(shifted.toString()).toBe('?');
+    expect(shifted.keystroke()).toBe('shift+/');
+    expect(shifted.key().shiftedCode).toBe('?'.codePointAt(0));
+
+    const [released] = parseInput(Buffer.from('\x1b[97;5:3u'));
+    expect(released).toBeInstanceOf(KeyReleaseMsg);
+    expect(released.toString()).toBe('ctrl+a');
+  });
+
+  test('mouse motion formatting matches upstream for buttonless movement', () => {
+    const motion = new MouseMotionMsg({
+      x: 2,
+      y: 5,
+      button: MouseButton.None,
+      mod: KeyMod.Ctrl,
+    });
+    expect(motion.toString()).toBe('ctrl+motion');
+    expect(motion.mouse()).toEqual({ x: 2, y: 5, button: MouseButton.None, mod: KeyMod.Ctrl });
+  });
+
+  test('parser preserves C0 and Alt-key distinctions', () => {
+    const [lineFeed] = parseInput(Buffer.from([0x0a]));
+    expect(lineFeed.toString()).toBe('ctrl+j');
+
+    const [altTab] = parseInput(Buffer.from([0x1b, 0x09]));
+    expect(altTab.toString()).toBe('alt+tab');
+
+    const [altUnicode] = parseInput(Buffer.concat([Buffer.from([0x1b]), Buffer.from('€')]));
+    expect(altUnicode.toString()).toBe('€');
+    expect(altUnicode.keystroke()).toBe('alt+€');
+  });
+
+  test('parser emits Kitty enhancements, mode reports and repeat metadata', () => {
+    const [enhancements] = parseInput(Buffer.from('\x1b[?3u'));
+    expect(enhancements).toBeInstanceOf(KeyboardEnhancementsMsg);
+    expect(enhancements.supportsKeyDisambiguation()).toBe(true);
+    expect(enhancements.supportsEventTypes()).toBe(true);
+
+    const [mode] = parseInput(Buffer.from('\x1b[?2026;2$y'));
+    expect(mode).toBeInstanceOf(ModeReportMsg);
+    expect(mode.mode).toBe(2026);
+    expect(mode.value).toBe(ModeSetting.Reset);
+
+    const [repeat] = parseInput(Buffer.from('\x1b[97;1:2u'));
+    expect(repeat).toBeInstanceOf(KeyPressMsg);
+    expect(repeat.isRepeat).toBe(true);
+    expect(repeat.text).toBe('a');
+  });
+
+  test('parser emits OSC color and clipboard reports', () => {
+    const [background] = parseInput(Buffer.from('\x1b]11;rgb:ffff/0000/8080\x1b\\'));
+    expect(background).toBeInstanceOf(BackgroundColorMsg);
+    expect(background.toString()).toBe('#ff0080');
+
+    const c1 = Buffer.concat([
+      Buffer.from([0x9d]),
+      Buffer.from('11;rgb:0000/ffff/0000'),
+      Buffer.from([0x9c]),
+    ]);
+    const [c1Background] = parseInput(c1);
+    expect(c1Background.toString()).toBe('#00ff00');
+
+    const [clipboard] = parseInput(Buffer.from('\x1b]52;c;aGVsbG8=\x07'));
+    expect(clipboard).toBeInstanceOf(ClipboardMsg);
+    expect(clipboard.clipboard()).toBe('c');
+    expect(clipboard.toString()).toBe('hello');
+  });
+
+  test('parser emits DCS capability and terminal version reports', () => {
+    const [capability] = parseInput(Buffer.from('\x1bP1+r5463\x1b\\'));
+    expect(capability).toBeInstanceOf(CapabilityMsg);
+    expect(capability.toString()).toBe('Tc');
+
+    const [version] = parseInput(Buffer.from('\x1bP>|XTerm(390)\x1b\\'));
+    expect(version).toBeInstanceOf(TerminalVersionMsg);
+    expect(version.toString()).toBe('XTerm(390)');
+  });
+
+  test('InputDecoder retains split escape sequences and UTF-8', () => {
+    const decoder = new InputDecoder();
+    expect(decoder.feed(Buffer.from('\x1b['))).toEqual([]);
+    const [up] = decoder.feed(Buffer.from('A'));
+    expect(up.code).toBe(KeyCode.Up);
+
+    const euro = Buffer.from('€');
+    expect(decoder.feed(euro.subarray(0, 1))).toEqual([]);
+    const [decoded] = decoder.feed(euro.subarray(1));
+    expect(decoded.text).toBe('€');
+
+    expect(decoder.feed(Buffer.from([0x9b, 0x3f, 0x32]))).toEqual([]);
+    const [c1Mode] = decoder.feed(Buffer.from('026;2$y'));
+    expect(c1Mode).toBeInstanceOf(ModeReportMsg);
+  });
+
+  test('terminal request commands use distinct request messages and preserve raw values', () => {
+    expect(RequestWindowSize()).not.toBeInstanceOf(WindowSizeMsg);
+    const clipboard = SetClipboard('hello')!();
+    expect(clipboard).toBeInstanceOf(ClipboardSetRequestMsg);
+    expect(clipboard.content).toBe('hello');
+
+    const value = { custom: true };
+    const raw = Raw(value)!() as RawMsg;
+    expect(raw).toBeInstanceOf(RawMsg);
+    expect(raw.msg).toBe(value);
+  });
+
+  test('renderer applies declarative terminal state and view-local mouse handler', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    const mouseCommand = Quit;
+    const view = NewView('hello');
+    view.altScreen = true;
+    view.reportFocus = true;
+    view.mouseMode = MouseMode.AllMotion;
+    view.windowTitle = 'parity';
+    view.cursor = NewCursor(1, 2);
+    view.onMouse = () => mouseCommand;
+
+    renderer.start();
+    renderer.render(view);
+    renderer.flush(false);
+    expect(rendered).toContain('\x1b[?1049h');
+    expect(rendered).toContain('\x1b[?1004h');
+    expect(rendered).toContain('\x1b[?1003h');
+    expect(rendered).toContain('\x1b]2;parity\x1b\\');
+    rendered = '';
+    renderer.setSynchronizedOutput(true);
+    view.setContent('updated');
+    renderer.render(view);
+    renderer.flush(false);
+    expect(rendered).toContain('\x1b[?2026h');
+    expect(rendered).toContain('\x1b[?2026l');
+    expect(renderer.onMouse(new MouseMotionMsg({
+      x: 0,
+      y: 0,
+      button: MouseButton.None,
+      mod: KeyMod.None,
+    }))).toBe(mouseCommand);
+  });
+
+  test('Program publishes environment, color profile and window reports at startup', async () => {
+    class ReportsModel implements Model {
+      reports: Msg[] = [];
+      init(): Cmd {
+        return null;
+      }
+      update(msg: Msg): [Model, Cmd] {
+        this.reports.push(msg);
+        return [this, msg instanceof EnvMsg ? Quit : null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+
+    const model = new ReportsModel();
+    const program = new Program(
+      model,
+      WithInput(null),
+      WithoutRenderer(),
+      WithoutSignalHandler(),
+      WithEnvironment(['TERM=xterm-256color', 'EMPTY=']),
+      WithColorProfile(ColorProfile.ANSI256),
+      WithWindowSize(90, 30),
+    );
+    await program.run();
+
+    expect(model.reports.some((msg) => msg instanceof ColorProfileMsg)).toBe(true);
+    expect(model.reports.some((msg) => msg instanceof WindowSizeMsg)).toBe(true);
+    const environment = model.reports.find((msg) => msg instanceof EnvMsg) as EnvMsg;
+    expect(environment.getenv('TERM')).toBe('xterm-256color');
+    expect(environment.lookupEnv('EMPTY')).toEqual(['', true]);
+  });
+
+  test('Program queues pre-run Send and rejects an already-aborted context', async () => {
+    const queued = new Program(new TestModel(), ...testOpts());
+    queued.send(new QuitMsg());
+    await queued.run();
+
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = new Program(new TestModel(), ...testOpts(), WithAbortSignal(controller.signal));
+    await expect(aborted.run()).rejects.toBe(ErrProgramKilled);
+  });
+
+  test('Exec releases the terminal, runs the command and delivers callback result', async () => {
+    class ExecDone {}
+    let ran = false;
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {},
+      async run() {
+        ran = true;
+      },
+    };
+    class ExecModel implements Model {
+      init(): Cmd {
+        return Exec(command, (error) => {
+          expect(error).toBeNull();
+          return new ExecDone();
+        });
+      }
+      update(msg: Msg): [Model, Cmd] {
+        return [this, msg instanceof ExecDone ? Quit : null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+
+    await new Program(new ExecModel(), ...testOpts()).run();
+    expect(ran).toBe(true);
+  });
+  test('XTVERSION and extended key constants match upstream protocol values', () => {
+    expect(ansi.requestTerminalVersion).toBe('\x1b[>q');
+    expect(ExtendedKeyCode.Begin).toBe(KeyExtended + 5);
+    expect(ExtendedKeyCode.Select).toBe(KeyExtended + 9);
+    expect(ExtendedKeyCode.KpEnter).toBe(KeyExtended + 14);
+    expect(ExtendedKeyCode.F21).toBe(KeyExtended + 64);
+  });
+
+  test('InputDecoder timeout flush preserves partial protocols but emits bare Escape', () => {
+    const decoder = new InputDecoder();
+    expect(decoder.feed(Buffer.from('\x1b['))).toEqual([]);
+    expect(decoder.flush()).toEqual([]);
+    const [up] = decoder.feed(Buffer.from('A'));
+    expect(up.code).toBe(KeyCode.Up);
+
+    expect(decoder.feed(Buffer.from('\x1b'))).toEqual([]);
+    const [escape] = decoder.flush();
+    expect(escape.code).toBe(KeyCode.Escape);
+  });
+
+  test('renderer close resets declarative terminal state', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    const view = NewView('state');
+    view.windowTitle = 'temporary';
+    view.cursor = NewCursor(4, 2);
+    view.cursor.color = '#ffffff';
+    view.progressBar = NewProgressBar(ProgressBarState.Default, 50);
+    renderer.start();
+    renderer.render(view);
+    renderer.flush(false);
+    renderer.close();
+    expect(rendered).toContain('\x1b[0 q');
+    expect(rendered).toContain('\x1b]112\x1b\\');
+    expect(rendered).toContain('\x1b]9;4;0;0\x1b\\');
+    expect(rendered).toContain('\x1b]2;\x1b\\');
+    expect(rendered).toContain('\x1b[?25h');
+  });
+
+  test('RequestWindowSize queries streams without synchronous dimensions', async () => {
+    class SizeRequestModel implements Model {
+      init(): Cmd {
+        return Sequence(RequestWindowSize, Quit);
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    await new Program(
+      new SizeRequestModel(),
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    ).run();
+    expect(rendered).toContain(ansi.requestWindowSize);
+  });
+
+  test('command results from an earlier run cannot enter a later run', async () => {
+    let resolveOld!: (msg: Msg) => void;
+    class RerunModel implements Model {
+      runs = 0;
+      staleUpdates = 0;
+      init(): Cmd {
+        this.runs++;
+        if (this.runs === 1) {
+          return () => new Promise<Msg>((resolve) => {
+            resolveOld = resolve;
+          });
+        }
+        return Tick(5, Quit);
+      }
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof IncrementMsg) this.staleUpdates++;
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const model = new RerunModel();
+    const program = new Program(model, ...testOpts());
+    program.send(new QuitMsg());
+    await program.run();
+    const rerun = program.run();
+    resolveOld(new IncrementMsg());
+    await rerun;
+    expect(model.staleUpdates).toBe(0);
+  });
+
+  test('Exec guards parent process signal handlers while the child owns the terminal', async () => {
+    const baseline = process.listenerCount('SIGINT');
+    let duringExec = -1;
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {},
+      async run() {
+        duringExec = process.listenerCount('SIGINT');
+      },
+    };
+    class SignalExecModel implements Model {
+      init(): Cmd {
+        return Exec(command, () => new QuitMsg());
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    await new Program(
+      new SignalExecModel(),
+      WithInput(null),
+      WithOutput(new PassThrough()),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+    ).run();
+    expect(duringExec).toBe(baseline + 1);
+  });
+
+  test('WithoutCatchPanics propagates nested Sequence rejection through run', async () => {
+    const failure = new Error('nested command failed');
+    class NestedFailureModel implements Model {
+      init(): Cmd {
+        return Sequence(() => Promise.reject(failure));
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const program = new Program(
+      new NestedFailureModel(),
+      ...testOpts(),
+      WithoutCatchPanics(),
+    );
+    await expect(program.run()).rejects.toBe(failure);
+  });
+
+  test('malformed Kitty shifted codepoints are ignored without throwing', () => {
+    const [key] = parseInput(Buffer.from('\x1b[97:1114112;2u'));
+    expect(key).toBeInstanceOf(KeyPressMsg);
+    expect(key.shiftedCode).toBeUndefined();
+    expect(key.text).toBe('a');
+  });
+
+  test('C1 bracketed paste is decoded as one PasteMsg', () => {
+    const input = Buffer.concat([
+      Buffer.from([0x9b]),
+      Buffer.from('200~pasted'),
+      Buffer.from([0x9b]),
+      Buffer.from('201~'),
+    ]);
+    const [paste] = parseInput(input);
+    expect(paste).toBeInstanceOf(PasteMsg);
+    expect(paste.content).toBe('pasted');
+  });
+
+  test('view mouse callback panics use Program panic recovery', async () => {
+    const view = NewView('mouse');
+    view.onMouse = () => {
+      throw new Error('mouse callback panic');
+    };
+    class MousePanicModel implements Model {
+      init(): Cmd {
+        return Tick(30, () => new MouseMotionMsg({
+          x: 1,
+          y: 1,
+          button: MouseButton.None,
+          mod: KeyMod.None,
+        }));
+      }
+      update(msg: Msg): [Model, Cmd] {
+        return [this, msg instanceof MouseMotionMsg ? Quit : null];
+      }
+      view(): View {
+        return view;
+      }
+    }
+    const program = new Program(
+      new MousePanicModel(),
+      WithInput(null),
+      WithOutput(new PassThrough()),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    );
+    await expect(program.run()).rejects.toBe(ErrProgramPanic);
+  });
+
+  test('renderer redraws unchanged content when declarative screen state changes', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    const view = NewView('same');
+    renderer.start();
+    renderer.render(view);
+    renderer.flush(false);
+    rendered = '';
+    view.altScreen = true;
+    renderer.render(view);
+    renderer.flush(false);
+    expect(rendered).toContain(ansi.enterAltScreen);
+    expect(rendered).toContain('same');
+  });
+
+  test('renderer mouse handler is available before the first timer flush', () => {
+    const renderer = new StandardRenderer(new PassThrough(), 80, 24);
+    const view = NewView('mouse');
+    view.onMouse = Quit;
+    renderer.start();
+    renderer.render(view);
+    expect(renderer.onMouse(new MouseMotionMsg({
+      x: 0,
+      y: 0,
+      button: MouseButton.None,
+      mod: KeyMod.None,
+    }))).toBeInstanceOf(QuitMsg);
+  });
+
+  test('renderer close resets only declarative state that was emitted', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    renderer.start();
+    renderer.render(NewView('plain'));
+    renderer.flush(false);
+    rendered = '';
+    renderer.close();
+    expect(rendered).not.toContain(ansi.resetWindowTitle);
+    expect(rendered).not.toContain(ansi.resetCursorColor);
+    expect(rendered).not.toContain(ansi.resetCursorShape);
+    expect(rendered).not.toContain(ansi.resetProgressBar);
+    expect(rendered).not.toContain(ansi.resetForegroundColor);
+    expect(rendered).not.toContain(ansi.resetBackgroundColor);
+  });
+
+  test('Program shutdown emits no alt-screen enter after its final exit', async () => {
+    class AltShutdownModel implements Model {
+      init(): Cmd {
+        return Quit;
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): View {
+        const view = NewView('alt');
+        view.altScreen = true;
+        return view;
+      }
+    }
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    await new Program(
+      new AltShutdownModel(),
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    ).run();
+    expect(rendered.lastIndexOf(ansi.exitAltScreen)).toBeGreaterThan(
+      rendered.lastIndexOf(ansi.enterAltScreen),
+    );
+  });
+
+  test('restoreTerminal publishes a changed synchronous terminal size', async () => {
+    const output = Object.assign(new PassThrough(), { columns: 80, rows: 24 });
+    const sizes: WindowSizeMsg[] = [];
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {},
+      async run() {
+        output.columns = 100;
+        output.rows = 40;
+      },
+    };
+    class ResizeExecModel implements Model {
+      init(): Cmd {
+        return Exec(command, () => new QuitMsg());
+      }
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof WindowSizeMsg) sizes.push(msg);
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    await new Program(
+      new ResizeExecModel(),
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    ).run();
+    expect(sizes.some((size) => size.width === 100 && size.height === 40)).toBe(true);
+  });
+  test('Exec restore repaints the view that preceded terminal release', async () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {},
+      async run() {
+        output.write('CHILD');
+      },
+    };
+    class RepaintExecModel implements Model {
+      init(): Cmd {
+        return Exec(command, () => new QuitMsg());
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return 'persistent view';
+      }
+    }
+    await new Program(
+      new RepaintExecModel(),
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    ).run();
+    expect(rendered.slice(rendered.indexOf('CHILD') + 5)).toContain('persistent view');
+  });
+
+  test('renderer reuse after close does not retain alt-screen intent', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    const alt = NewView('alt');
+    alt.altScreen = true;
+    renderer.start();
+    renderer.render(alt);
+    renderer.flush(false);
+    renderer.close();
+    rendered = '';
+    renderer.start();
+    renderer.render('inline');
+    renderer.flush(false);
+    expect(rendered).not.toContain(ansi.enterAltScreen);
+    expect(rendered).toContain('inline');
+  });
+
+  test('kill cancels an in-flight interactive command and unblocks run', async () => {
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let cancelled = false;
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {},
+      run() {
+        signalStarted();
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    };
+    class HungExecModel implements Model {
+      init(): Cmd {
+        return Exec(command);
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const program = new Program(new HungExecModel(), ...testOpts());
+    const running = program.run();
+    await started;
+    program.kill();
+    await expect(running).rejects.toBe(ErrProgramKilled);
+    expect(cancelled).toBe(true);
+  });
+
+
+  test('removing a declarative cursor resets its terminal shape', () => {
+    const output = new PassThrough();
+    let rendered = '';
+    output.on('data', (chunk: Buffer) => {
+      rendered += chunk.toString();
+    });
+    const renderer = new StandardRenderer(output, 80, 24);
+    const withCursor = NewView('cursor');
+    withCursor.cursor = NewCursor(0, 0);
+    withCursor.cursor.shape = CursorShape.Bar;
+    withCursor.cursor.blink = false;
+    renderer.start();
+    renderer.render(withCursor);
+    renderer.flush(false);
+    rendered = '';
+    renderer.render(NewView('no cursor'));
+    renderer.flush(false);
+    expect(rendered).toContain(ansi.resetCursorShape);
+  });
+
+  test('Kitty C0 and invalid scalar codepoints match upstream semantics', () => {
+    const [ctrlSpace] = parseInput(Buffer.from('\x1b[0;5u'));
+    expect(ctrlSpace).toBeInstanceOf(KeyPressMsg);
+    expect(ctrlSpace.code).toBe(KeyCode.Space);
+    expect(ctrlSpace.mod & KeyMod.Ctrl).toBeTruthy();
+    expect(ctrlSpace.toString()).toBe('ctrl+space');
+
+    const [ctrlA] = parseInput(Buffer.from('\x1b[1;5u'));
+    expect(ctrlA.code).toBe('a'.codePointAt(0));
+    expect(ctrlA.toString()).toBe('ctrl+a');
+
+    const [ctrlBackslash] = parseInput(Buffer.from('\x1b[28;5u'));
+    expect(ctrlBackslash.code).toBe('\\'.codePointAt(0));
+    expect(ctrlBackslash.toString()).toBe('ctrl+\\');
+
+    for (const invalid of [55296, 0x110000]) {
+      const [replacement] = parseInput(Buffer.from(`\x1b[${invalid};1u`));
+      expect(replacement.code).toBe(0xfffd);
+      expect(replacement.text).toBe('\ufffd');
+      expect(replacement.toString()).toBe('\ufffd');
+    }
+  });
+  test('kill during interactive setup prevents a deferred command start', async () => {
+    let ran = false;
+    let program!: Program;
+    const command: ExecCommand = {
+      setStdin() {},
+      setStdout() {},
+      setStderr() {
+        program.kill();
+      },
+      async run() {
+        ran = true;
+      },
+    };
+    class ImmediateKillExecModel implements Model {
+      init(): Cmd {
+        return Exec(command);
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    program = new Program(new ImmediateKillExecModel(), ...testOpts());
+    await expect(program.run()).rejects.toBe(ErrProgramKilled);
+    expect(ran).toBe(false);
+  });
+
 });
