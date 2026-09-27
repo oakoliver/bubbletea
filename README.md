@@ -1,6 +1,6 @@
 # @oakoliver/bubbletea
 
-Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.1.0 targets API and behavior parity with upstream **Bubble Tea v2.0.8**.
+Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.2.0 targets API and behavior parity with upstream **Bubble Tea v2.0.10**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
 
 ## Features
 
@@ -13,9 +13,9 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 - Raw mode management, SIGINT/SIGTERM/SIGWINCH handling
 - Works on Node.js and Bun
 
-## Upstream v2.0.8 Surface Map
+## Upstream v2.0.10 Surface Map
 
-The TypeScript API keeps its established camel-case lifecycle (`init`, `update`, `view`, `run`, `send`) while mapping the complete portable v2.0.8 surface:
+The TypeScript API keeps its established camel-case lifecycle (`init`, `update`, `view`, `run`, `send`) while mapping the complete portable v2.0.10 surface (v2.0.9 and v2.0.10 were fix-only releases on top of v2.0.8):
 
 | Upstream Bubble Tea | TypeScript surface |
 | --- | --- |
@@ -135,6 +135,8 @@ const p = new Program(
   WithFilter((model, msg) => msg),    // Event filter
 );
 ```
+
+With input disabled (`WithInput(null)`), no terminal query is ever sent, since the reply could not be read and would otherwise leak into the shell after exit: `RequestBackgroundColor`, `RequestForegroundColor`, `RequestCursorColor`, `RequestCursorPosition`, `ReadClipboard`, `ReadPrimaryClipboard`, `RequestCapability`, `RequestTerminalVersion`, `RequestWindowSize` (when the output stream has no dimensions), the startup mode probe, and the Kitty keyboard enhancement protocol are all skipped.
 
 ## Key Input
 

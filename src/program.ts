@@ -100,7 +100,16 @@ function mutableOptions(program: Program): MutableProgramOptions {
   return program as unknown as MutableProgramOptions;
 }
 
-/** Sets the input stream. Pass null to disable input. */
+/**
+ * Sets the input stream. Pass null to disable input.
+ *
+ * Note that with input disabled, no terminal query is ever sent, since the
+ * reply could not be read: commands that expect a response, such as
+ * RequestBackgroundColor, RequestCursorPosition, ReadClipboard, or
+ * RequestTerminalVersion, are skipped, as is the startup capability probe.
+ * A model waiting on the reply message of any of those commands will never
+ * receive it.
+ */
 export function WithInput(input: Readable | NodeJS.ReadStream | null): ProgramOption {
   return (p) => {
     mutableOptions(p)._input = input;
@@ -458,6 +467,7 @@ export class Program {
         this._width,
         this._height,
       );
+      r.setNoInput(this._disableInput);
       this._renderer = r;
     }
 
@@ -474,7 +484,7 @@ export class Program {
     // Start rendering, then publish the startup reports Bubble Tea guarantees.
     this._startRenderer();
     if (!this._disableRenderer && shouldQuerySynchronizedOutput(this._environment)) {
-      this._writeToOutput(ansi.requestSyncOutputMode + ansi.requestUnicodeCoreMode);
+      this._executeQuery(ansi.requestSyncOutputMode + ansi.requestUnicodeCoreMode);
     }
     this._colorProfile ??= detectColorProfile(this._environment);
     this._enqueueMsg(new ColorProfileMsg(this._colorProfile));
@@ -582,31 +592,31 @@ export class Program {
     if (msg instanceof WindowSizeRequestMsg) {
       const size = this._reportedTerminalSize();
       if (size) this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
-      else this._writeToOutput(ansi.requestWindowSize);
+      else this._executeQuery(ansi.requestWindowSize);
     }
     if (msg instanceof CursorPositionRequestMsg) {
-      this._writeToOutput(ansi.requestCursorPosition);
+      this._executeQuery(ansi.requestCursorPosition);
     }
     if (msg instanceof BackgroundColorRequestMsg) {
-      this._writeToOutput(ansi.requestBackgroundColor);
+      this._executeQuery(ansi.requestBackgroundColor);
     }
     if (msg instanceof ForegroundColorRequestMsg) {
-      this._writeToOutput(ansi.requestForegroundColor);
+      this._executeQuery(ansi.requestForegroundColor);
     }
     if (msg instanceof CursorColorRequestMsg) {
-      this._writeToOutput(ansi.requestCursorColor);
+      this._executeQuery(ansi.requestCursorColor);
     }
     if (msg instanceof ClipboardReadRequestMsg) {
-      this._writeToOutput(ansi.requestClipboard(msg.selection));
+      this._executeQuery(ansi.requestClipboard(msg.selection));
     }
     if (msg instanceof ClipboardSetRequestMsg) {
       this._writeToOutput(ansi.setClipboard(msg.selection, msg.content));
     }
     if (msg instanceof CapabilityRequestMsg) {
-      this._writeToOutput(ansi.requestTermcap(msg.capability));
+      this._executeQuery(ansi.requestTermcap(msg.capability));
     }
     if (msg instanceof TerminalVersionRequestMsg) {
-      this._writeToOutput(ansi.requestTerminalVersion);
+      this._executeQuery(ansi.requestTerminalVersion);
     }
     if (msg instanceof ExecRequestMsg) {
       await this._executeInteractive(msg.command, msg.callback);
@@ -957,6 +967,22 @@ export class Program {
     }
   }
 
+  /**
+   * Writes a terminal query to the program output. Queries expect a reply on
+   * the input, so when input is disabled the query is skipped: the program
+   * cannot read the response, and the terminal's reply would leak into the
+   * shell once the program exits (upstream #1590).
+   *
+   * This covers every query that expects a reply, not just the startup
+   * capability probe: background, foreground, and cursor color requests,
+   * cursor position reports, clipboard reads, and terminal version and
+   * termcap queries.
+   */
+  private _executeQuery(s: string): void {
+    if (this._disableInput) return;
+    this._writeToOutput(s);
+  }
+
   // ── Signal handling ───────────────────────────────────────────────────
 
   private _setupSignalHandlers(): void {
@@ -997,7 +1023,7 @@ export class Program {
   private _refreshTerminalSize(): void {
     const size = this._reportedTerminalSize();
     if (!size) {
-      this._writeToOutput(ansi.requestWindowSize);
+      this._executeQuery(ansi.requestWindowSize);
       return;
     }
     if (size.width === this._width && size.height === this._height) return;

@@ -147,7 +147,12 @@ export const requestTermcap = (capability: string) => {
 export const setModifyOtherKeys2 = `${CSI}>4;2m`;
 export const resetModifyOtherKeys = `${CSI}>4m`;
 export const requestKittyKeyboard = `${CSI}?u`;
-export const kittyKeyboard = (flags: number, mode = 1) => `${CSI}>${flags};${mode}u`;
+/** Sets the flags of the topmost Kitty keyboard stack entry in place (CSI = flags ; mode u). */
+export const kittyKeyboard = (flags: number, mode = 1) => `${CSI}=${flags};${mode}u`;
+/** Pushes a new entry onto the Kitty keyboard stack (CSI > flags u). */
+export const pushKittyKeyboard = (flags: number) => `${CSI}>${flags > 0 ? flags : ''}u`;
+/** Pops n entries from the Kitty keyboard stack (CSI < n u). */
+export const popKittyKeyboard = (n: number) => `${CSI}<${n > 0 ? n : ''}u`;
 
 export const setProgressBar = (state: number, value: number) =>
   `${OSC}9;4;${state};${value}${ST}`;

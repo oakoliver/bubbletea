@@ -157,18 +157,34 @@ export function Raw(value: unknown): Cmd {
 
 // ─── Terminal queries and clipboard ─────────────────────────────────────────
 
+/**
+ * Requests the cursor position, reported as a CursorPositionMsg.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestCursorPosition(): Msg {
   return new CursorPositionRequestMsg();
 }
 
+/**
+ * Requests the terminal background color.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestBackgroundColor(): Msg {
   return new BackgroundColorRequestMsg();
 }
 
+/**
+ * Requests the terminal foreground color.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestForegroundColor(): Msg {
   return new ForegroundColorRequestMsg();
 }
 
+/**
+ * Requests the terminal cursor color.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestCursorColor(): Msg {
   return new CursorColorRequestMsg();
 }
@@ -177,6 +193,10 @@ export function SetClipboard(content: string): Cmd {
   return () => new ClipboardSetRequestMsg('c', content);
 }
 
+/**
+ * Reads the system clipboard using OSC52. Not supported in all terminals.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function ReadClipboard(): Msg {
   return new ClipboardReadRequestMsg('c');
 }
@@ -185,14 +205,26 @@ export function SetPrimaryClipboard(content: string): Cmd {
   return () => new ClipboardSetRequestMsg('p', content);
 }
 
+/**
+ * Reads the primary (X11/Wayland) clipboard using OSC52.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function ReadPrimaryClipboard(): Msg {
   return new ClipboardReadRequestMsg('p');
 }
 
+/**
+ * Requests the terminal's Termcap/Terminfo response for a capability.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestCapability(capability: string): Cmd {
   return () => new CapabilityRequestMsg(capability);
 }
 
+/**
+ * Queries the terminal version using XTVERSION.
+ * Use WithInput to enable input, since the reply cannot be read otherwise.
+ */
 export function RequestTerminalVersion(): Msg {
   return new TerminalVersionRequestMsg();
 }

@@ -90,6 +90,16 @@ import {
   View,
   WithColorProfile,
   WithEnvironment,
+  formatProgressBarState,
+  ClearScreen,
+  RequestBackgroundColor,
+  RequestForegroundColor,
+  RequestCursorColor,
+  RequestCursorPosition,
+  ReadClipboard,
+  ReadPrimaryClipboard,
+  RequestCapability,
+  RequestTerminalVersion,
 } from '../src/index.js';
 
 // ─── Helper: wait until condition ───────────────────────────────────────────
@@ -1583,9 +1593,10 @@ describe('Bubble Tea v2.0.8 parity surface', () => {
     output.on('data', (chunk: Buffer) => {
       rendered += chunk.toString();
     });
+    // The reply arrives on the input, so the query needs input enabled (v2.0.10).
     await new Program(
       new SizeRequestModel(),
-      WithInput(null),
+      WithInput(nullInput()),
       WithOutput(output),
       WithWindowSize(80, 24),
       WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
@@ -2015,4 +2026,293 @@ describe('Bubble Tea v2.0.8 parity surface', () => {
     expect(ran).toBe(false);
   });
 
+});
+
+// ─── Bubble Tea v2.0.9 / v2.0.10 parity ─────────────────────────────────────
+
+describe('Bubble Tea v2.0.10 parity', () => {
+  function capture(): { stream: PassThrough; data: () => string; reset: () => void } {
+    const stream = new PassThrough();
+    let data = '';
+    stream.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+    return { stream, data: () => data, reset: () => (data = '') };
+  }
+
+  class QueryModel implements Model {
+    init(): Cmd {
+      return Sequence(
+        RequestBackgroundColor,
+        RequestForegroundColor,
+        RequestCursorColor,
+        RequestCursorPosition,
+        ReadClipboard,
+        ReadPrimaryClipboard,
+        RequestCapability('RGB'),
+        RequestTerminalVersion,
+        RequestWindowSize,
+        Quit,
+      );
+    }
+    update(): [Model, Cmd] {
+      return [this, null];
+    }
+    view(): string {
+      return 'queries';
+    }
+  }
+
+  const queries = [
+    ansi.requestBackgroundColor,
+    ansi.requestForegroundColor,
+    ansi.requestCursorColor,
+    ansi.requestCursorPosition,
+    ansi.requestClipboard('c'),
+    ansi.requestClipboard('p'),
+    ansi.requestTermcap('RGB'),
+    ansi.requestTerminalVersion,
+    ansi.requestWindowSize,
+    ansi.requestSyncOutputMode,
+    ansi.requestUnicodeCoreMode,
+    ansi.requestKittyKeyboard,
+  ];
+
+  test('KeyMediaRecord is a distinct key (fix #1757)', () => {
+    const [record] = parseInput(Buffer.from('\x1b[57437u'));
+    expect(record).toBeInstanceOf(KeyPressMsg);
+    expect(ExtendedKeyCode.MediaRecord).toBe(ExtendedKeyCode.MediaPrevious + 1);
+    expect(record.code).toBe(ExtendedKeyCode.MediaRecord);
+    expect(record.code).not.toBe(ExtendedKeyCode.MediaPrevious);
+    expect(record.toString()).toBe('mediarecord');
+
+    const [previous] = parseInput(Buffer.from('\x1b[57436u'));
+    expect(previous.toString()).toBe('mediaprev');
+  });
+
+  test('every ExtendedKeyCode member is defined at runtime', () => {
+    // Auto-incremented members after a `KeyExtended + n` initializer used to
+    // be undefined under Bun/esbuild, which broke media, lock and F22+ keys.
+    const values = Object.keys(ExtendedKeyCode)
+      .filter((name) => Number.isNaN(Number(name)))
+      .map((name) => ExtendedKeyCode[name as keyof typeof ExtendedKeyCode]);
+    expect(values.length).toBeGreaterThan(100);
+    for (const value of values) {
+      expect(typeof value).toBe('number');
+      expect(value).toBeGreaterThanOrEqual(KeyExtended);
+    }
+    expect(new Set(values).size).toBe(values.length);
+    expect(parseInput(Buffer.from('\x1b[57358u'))[0].toString()).toBe('capslock');
+    expect(parseInput(Buffer.from('\x1b[57385u'))[0].toString()).toBe('f22');
+  });
+
+  test('MouseButton11 is distinct from MouseButton10 (fix #1754)', () => {
+    expect(MouseButton.Button11).not.toBe(MouseButton.Button10);
+    // SGR extended buttons: 128 = backward, 129 = forward, 130 = button10, 131 = button11.
+    const [b10] = parseInput(Buffer.from('\x1b[<130;5;6M'));
+    const [b11] = parseInput(Buffer.from('\x1b[<131;5;6M'));
+    expect(b10.button).toBe(MouseButton.Button10);
+    expect(b11.button).toBe(MouseButton.Button11);
+    expect(b11.toString()).toBe('button11');
+  });
+
+  test('ProgressBarState formatting returns Unknown for out-of-range values (fix #1748)', () => {
+    expect(formatProgressBarState(ProgressBarState.None)).toBe('None');
+    expect(formatProgressBarState(ProgressBarState.Default)).toBe('Default');
+    expect(formatProgressBarState(ProgressBarState.Error)).toBe('Error');
+    expect(formatProgressBarState(ProgressBarState.Indeterminate)).toBe('Indeterminate');
+    expect(formatProgressBarState(ProgressBarState.Warning)).toBe('Warning');
+    expect(formatProgressBarState(5 as ProgressBarState)).toBe('Unknown');
+    expect(formatProgressBarState(-1 as ProgressBarState)).toBe('Unknown');
+    expect(formatProgressBarState(255 as ProgressBarState)).toBe('Unknown');
+  });
+
+  test('clearScreen forces a redraw of an unchanged view (pendingErase, fix #1755)', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('still here'));
+    r.flush(false);
+    expect(out.data()).toContain('still here');
+
+    out.reset();
+    r.flush(false); // Nothing changed, nothing to do.
+    expect(out.data()).toBe('');
+
+    r.clearScreen();
+    r.flush(false); // No new render() call, but the erase must be repainted.
+    expect(out.data().startsWith(ansi.clearScreen)).toBe(true);
+    expect(out.data().indexOf('still here')).toBeGreaterThan(out.data().indexOf(ansi.clearScreen));
+  });
+
+  test('resize forces a redraw of an unchanged view (pendingErase, fix #1755)', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('sized'));
+    r.flush(false);
+    out.reset();
+    r.resize(100, 30);
+    r.flush(false);
+    expect(out.data()).toContain('sized');
+  });
+
+  test('Kitty keyboard stack is pushed on first render and popped on close (fix #1750)', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('kitty'));
+    r.flush(false);
+    // DisambiguateEscapeCodes (1) is always requested.
+    expect(out.data()).toContain(ansi.setModifyOtherKeys2 + ansi.pushKittyKeyboard(1) + ansi.requestKittyKeyboard);
+    expect(out.data()).not.toContain(ansi.popKittyKeyboard(1));
+
+    out.reset();
+    r.close();
+    expect(out.data()).toContain(ansi.resetModifyOtherKeys + ansi.popKittyKeyboard(1));
+    expect(out.data()).not.toContain('\x1b[>0;1u');
+    expect(out.data()).not.toContain('\x1b[>u');
+  });
+
+  test('Kitty flag changes on the same screen update the top entry in place', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('a'));
+    r.flush(false);
+    out.reset();
+
+    const view = NewView('a');
+    view.keyboardEnhancements.reportEventTypes = true;
+    r.render(view);
+    r.flush(false);
+    expect(out.data()).toContain(ansi.kittyKeyboard(3, 1));
+    expect(ansi.kittyKeyboard(3, 1)).toBe('\x1b[=3;1u');
+    expect(out.data()).not.toContain(ansi.pushKittyKeyboard(3));
+    expect(out.data()).not.toContain(ansi.popKittyKeyboard(1));
+  });
+
+  test('switching screens pops the old Kitty entry before pushing a new one', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('main'));
+    r.flush(false);
+    out.reset();
+
+    const alt = NewView('alt');
+    alt.altScreen = true;
+    r.render(alt);
+    r.flush(false);
+    const data = out.data();
+    const pop = data.indexOf(ansi.resetModifyOtherKeys + ansi.popKittyKeyboard(1));
+    const enter = data.indexOf(ansi.enterAltScreen);
+    const push = data.indexOf(ansi.pushKittyKeyboard(1));
+    expect(pop).toBeGreaterThanOrEqual(0);
+    expect(enter).toBeGreaterThan(pop);
+    expect(push).toBeGreaterThan(enter);
+
+    // Pushes and pops stay balanced across a full lifecycle.
+    r.render(NewView('main again'));
+    r.flush(false);
+    r.close();
+    const all = out.data();
+    const count = (needle: string) => all.split(needle).length - 1;
+    expect(count(ansi.pushKittyKeyboard(1))).toBe(2);
+    expect(count(ansi.popKittyKeyboard(1))).toBe(3);
+  });
+
+  test('ansi Kitty helpers match x/ansi encodings', () => {
+    expect(ansi.pushKittyKeyboard(0)).toBe('\x1b[>u');
+    expect(ansi.pushKittyKeyboard(9)).toBe('\x1b[>9u');
+    expect(ansi.popKittyKeyboard(1)).toBe('\x1b[<1u');
+    expect(ansi.popKittyKeyboard(0)).toBe('\x1b[<u');
+    expect(ansi.kittyKeyboard(0, 1)).toBe('\x1b[=0;1u');
+  });
+
+  test('renderer with input disabled never touches the keyboard protocol', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.setNoInput(true);
+    r.start();
+    r.render(NewView('main'));
+    r.flush(false);
+    const alt = NewView('alt');
+    alt.altScreen = true;
+    alt.keyboardEnhancements.reportEventTypes = true;
+    r.render(alt);
+    r.flush(false);
+    r.close();
+    const data = out.data();
+    expect(data).toContain('alt');
+    expect(data).toContain(ansi.enterAltScreen);
+    for (const seq of [
+      ansi.setModifyOtherKeys2,
+      ansi.resetModifyOtherKeys,
+      ansi.requestKittyKeyboard,
+      '\x1b[>1u',
+      '\x1b[<1u',
+      '\x1b[=',
+    ]) {
+      expect(data).not.toContain(seq);
+    }
+  });
+
+  test('WithInput(null) skips every terminal query (fix #1801)', async () => {
+    const out = capture();
+    await new Program(
+      new QueryModel(),
+      WithInput(null),
+      WithOutput(out.stream),
+      WithWindowSize(80, 24),
+      // An environment that would normally trigger the startup mode probe.
+      WithEnvironment({ TERM: 'xterm-ghostty' }),
+      WithoutSignalHandler(),
+    ).run();
+    const data = out.data();
+    expect(data).toContain('queries');
+    for (const query of queries) expect(data).not.toContain(query);
+  });
+
+  test('queries are still sent when input is enabled', async () => {
+    const out = capture();
+    await new Program(
+      new QueryModel(),
+      WithInput(nullInput()),
+      WithOutput(out.stream),
+      // No WithWindowSize/stream dimensions, so RequestWindowSize must query.
+      WithEnvironment({ TERM: 'xterm-ghostty' }),
+      WithoutSignalHandler(),
+    ).run();
+    const data = out.data();
+    // The Kitty keyboard query is skipped on the closing flush, so exclude it.
+    for (const query of queries.filter((q) => q !== ansi.requestKittyKeyboard)) {
+      expect(data).toContain(query);
+    }
+  });
+
+  test('ClearScreen command still clears with input disabled', async () => {
+    class ClearModel implements Model {
+      init(): Cmd {
+        return Sequence(ClearScreen, Quit);
+      }
+      update(): [Model, Cmd] {
+        return [this, null];
+      }
+      view(): string {
+        return 'cleared';
+      }
+    }
+    const out = capture();
+    await new Program(
+      new ClearModel(),
+      WithInput(null),
+      WithOutput(out.stream),
+      WithWindowSize(80, 24),
+      WithEnvironment({ TERM_PROGRAM: 'Apple_Terminal' }),
+      WithoutSignalHandler(),
+    ).run();
+    expect(out.data()).toContain(ansi.clearScreen);
+    expect(out.data().lastIndexOf('cleared')).toBeGreaterThan(out.data().indexOf(ansi.clearScreen));
+  });
 });

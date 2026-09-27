@@ -70,6 +70,8 @@ export class StandardRenderer implements Renderer {
   private linesRendered = 0;
   private useAltScreen = false;
   private synchronizedOutput = false;
+  /** Whether input is disabled, in which case keyboard enhancement queries are pointless. */
+  private noInput = false;
   constructor(output: NodeJS.WritableStream, width: number, height: number) {
     this.output = output;
     this.width = width;
@@ -80,12 +82,25 @@ export class StandardRenderer implements Renderer {
     this.started = true;
   }
 
+  /**
+   * Disables keyboard enhancement requests. When the program runs without
+   * input, the terminal's response to a keyboard enhancement query would
+   * arrive after the program has exited and leak into the shell.
+   */
+  setNoInput(noInput: boolean): void {
+    this.noInput = noInput;
+  }
+
   close(): void {
     if (!this.started) return;
     const view = this.lastView;
     let out = '';
     if (view) {
-      out += ansi.resetModifyOtherKeys + ansi.kittyKeyboard(0);
+      // Pop the keyboard protocol entry of the last screen used, assuming
+      // the other screen's entry was already popped when we switched
+      // screens. With input disabled we never pushed an entry, so there is
+      // nothing to pop.
+      if (!this.noInput) out += ansi.resetModifyOtherKeys + ansi.popKittyKeyboard(1);
       if (!view.disableBracketedPasteMode) out += ansi.disableBracketedPaste;
       if (view.reportFocus) out += ansi.disableFocusReporting;
       if (view.mouseMode === MouseMode.CellMotion) {
@@ -254,6 +269,9 @@ export class StandardRenderer implements Renderer {
     this.lastFrame = '';
     this.lastLines = [];
     this.linesRendered = 0;
+    // An erase is pending: the next flush must redraw even when the view is
+    // unchanged, otherwise the screen would stay blank.
+    this.dirty = true;
   }
 
   repaint(): void {
@@ -299,6 +317,10 @@ export class StandardRenderer implements Renderer {
     let out = '';
 
     if (view.altScreen !== this.altScreen) {
+      // We always reset keyboard enhancements when switching screens because
+      // the terminal is expected to have two different keyboard registries
+      // for main and alt screens.
+      out += this.resetKeyboardEnhancements(previous);
       if (view.altScreen) {
         this.altScreen = true;
         this.useAltScreen = true;
@@ -335,10 +357,15 @@ export class StandardRenderer implements Renderer {
       if (previous || view.windowTitle) out += ansi.setWindowTitle(view.windowTitle);
     }
 
+    // Kitty keyboard protocol. Skipped entirely when input is disabled: the
+    // enhancements only affect keyboard input, and querying the terminal
+    // would leave its response unconsumed, leaking into the shell after the
+    // program exits.
     if (
-      !previous ||
-      JSON.stringify(previous.keyboardEnhancements) !== JSON.stringify(view.keyboardEnhancements) ||
-      previous.altScreen !== view.altScreen
+      !this.noInput &&
+      (!previous ||
+        JSON.stringify(previous.keyboardEnhancements) !== JSON.stringify(view.keyboardEnhancements) ||
+        previous.altScreen !== view.altScreen)
     ) {
       let flags = KittyKeyboardFlag.DisambiguateEscapeCodes;
       if (view.keyboardEnhancements.reportEventTypes) flags |= KittyKeyboardFlag.ReportEventTypes;
@@ -347,7 +374,16 @@ export class StandardRenderer implements Renderer {
         flags |= KittyKeyboardFlag.ReportAllKeysAsEscapeCodes;
       }
       if (view.keyboardEnhancements.reportAssociatedText) flags |= KittyKeyboardFlag.ReportAssociatedText;
-      out += ansi.setModifyOtherKeys2 + ansi.kittyKeyboard(flags);
+      out += ansi.setModifyOtherKeys2;
+      if (!previous || previous.altScreen !== view.altScreen) {
+        // First render or screen switch: the previous screen's entry (if
+        // any) was popped above, so push a fresh one for this screen.
+        out += ansi.pushKittyKeyboard(flags);
+      } else {
+        // Only the flags changed while the same screen stays active. Update
+        // the topmost stack entry in place instead of popping and re-pushing.
+        out += ansi.kittyKeyboard(flags, 1);
+      }
       if (!closing) out += ansi.requestKittyKeyboard;
     }
 
@@ -390,6 +426,20 @@ export class StandardRenderer implements Renderer {
         : ansi.setProgressBar(ProgressBarState.None, 0);
     }
 
+    return out;
+  }
+
+  /**
+   * Resets keyboard enhancement protocols when switching between the main and
+   * alt screens. modifyOtherKeys has no stack, so it is reset in place; the
+   * Kitty keyboard stack is popped, but only if we previously pushed an entry
+   * (i.e. this is not the first render). With input disabled the keyboard
+   * protocol is never touched.
+   */
+  private resetKeyboardEnhancements(previous: View | null): string {
+    if (this.noInput) return '';
+    let out = ansi.resetModifyOtherKeys;
+    if (previous) out += ansi.popKittyKeyboard(1);
     return out;
   }
 

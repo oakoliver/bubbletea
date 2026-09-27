@@ -325,12 +325,19 @@ export const KeyExtended = 0x110000;
 export const KeyReturn = KeyCode.Enter;
 export const KeyEsc = KeyCode.Escape;
 
-/** Additional key codes from Bubble Tea's Kitty keyboard protocol surface. */
+/**
+ * Additional key codes from Bubble Tea's Kitty keyboard protocol surface.
+ *
+ * Initializers are numeric literals (0x110000 is KeyExtended) rather than
+ * references to KeyExtended: isolated-module transpilers (esbuild, Bun)
+ * cannot constant-fold a reference to another declaration, which left every
+ * auto-incremented member after it undefined at runtime.
+ */
 export enum ExtendedKeyCode {
-  Begin = KeyExtended + 5,
+  Begin = 0x110000 + 5,
   Find,
-  Select = KeyExtended + 9,
-  KpEnter = KeyExtended + 14,
+  Select = 0x110000 + 9,
+  KpEnter = 0x110000 + 14,
   KpEqual,
   KpMultiply,
   KpPlus,
@@ -360,7 +367,7 @@ export enum ExtendedKeyCode {
   KpInsert,
   KpDelete,
   KpBegin,
-  F21 = KeyExtended + 64,
+  F21 = 0x110000 + 64,
   F22,
   F23,
   F24,
