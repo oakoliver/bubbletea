@@ -1,5 +1,18 @@
 # Examples
 
+## Small programs
+
+Single-file programs with no dependencies beyond this repository. The README
+recordings are made from them with the tapes in `assets/tapes/`.
+
+```sh
+bun examples/shopping-list.ts  # the Bubble Tea basics tutorial
+bun examples/counter.ts        # the README Quick Start
+bun examples/countdown.ts      # Tick, Sequence and Println
+bun examples/keys.ts           # how KeyPressMsg describes each key
+bun examples/window-size.ts    # alt screen + WindowSizeMsg
+```
+
 ## mission-control.ts
 
 A full-screen dashboard built from Bubble Tea, Bubbles and Lip Gloss: a ports

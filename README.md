@@ -2,6 +2,8 @@
 
 Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.2.0 targets API and behavior parity with upstream **Bubble Tea v2.0.10**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
 
+<img alt="A shopping-list program built with @oakoliver/bubbletea: the cursor moves through three items and space toggles their checkboxes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/shopping-list.gif" width="600">
+
 ## Features
 
 - Full Elm Architecture: `init`, `update`, `view` lifecycle
@@ -41,6 +43,8 @@ npm install @oakoliver/bubbletea
 
 ## Quick Start
 
+<img alt="examples/counter.ts running inline below the shell command: the count goes up and down with the arrow keys, then q quits and the shell prompt returns on its own line" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/counter.gif" width="480">
+
 ```typescript
 import {
   type Msg,
@@ -78,6 +82,20 @@ const p = new Program(new Counter());
 await p.run();
 ```
 
+### Examples
+
+Runnable programs live in [`examples/`](examples/):
+
+```bash
+bun examples/shopping-list.ts  # the Bubble Tea basics tutorial
+bun examples/counter.ts        # the Quick Start above
+bun examples/countdown.ts      # Tick, Sequence and Println
+bun examples/keys.ts           # how KeyPressMsg describes each key
+bun examples/window-size.ts    # alt screen + WindowSizeMsg
+```
+
+The README recordings are made with [@oakoliver/vhs](https://github.com/oakoliver/vhs) from the tapes in [`assets/tapes/`](assets/tapes/).
+
 ## The Elm Architecture
 
 Every Bubbletea program revolves around three methods on a `Model`:
@@ -89,6 +107,8 @@ Every Bubbletea program revolves around three methods on a `Model`:
 Messages (`Msg`) flow through the event loop. Commands (`Cmd`) are functions that produce messages asynchronously.
 
 ## Commands
+
+<img alt="examples/countdown.ts: a progress bar counts down from 5 while Println prints a line above the program on every Tick, ending with Liftoff" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/countdown.gif" width="480">
 
 Commands are functions that return a `Msg` (or a `Promise<Msg>`). Bubbletea executes them asynchronously outside the event loop.
 
@@ -151,6 +171,8 @@ if (msg instanceof KeyPressMsg) {
 }
 ```
 
+<img alt="examples/keys.ts printing msg.toString(), text and modifiers for a, Z, enter, tab, shift+tab, ctrl+a and left" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/keys.gif" width="600">
+
 Special keys are in the `KeyCode` enum: `Enter`, `Tab`, `Escape`, `Backspace`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PgUp`, `PgDown`, `Insert`, `Delete`, `F1`-`F12`.
 
 ## Mouse Input
@@ -168,6 +190,8 @@ if (msg instanceof MouseClickMsg) {
 ## Window Size
 
 `WindowSizeMsg` is sent on startup and whenever the terminal resizes:
+
+<img alt="examples/window-size.ts drawing a full-screen frame in the alternate screen, showing the WindowSizeMsg dimensions and a ticking clock" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/window-size.gif" width="600">
 
 ```typescript
 if (msg instanceof WindowSizeMsg) {
