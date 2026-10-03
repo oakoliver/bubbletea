@@ -2316,3 +2316,96 @@ describe('Bubble Tea v2.0.10 parity', () => {
     expect(out.data().lastIndexOf('cleared')).toBeGreaterThan(out.data().indexOf(ansi.clearScreen));
   });
 });
+// ─── Inline renderer screen behaviour ───────────────────────────────────────
+
+/**
+ * Minimal terminal: applies the cursor movement and erase sequences the
+ * inline renderer emits to a list of screen lines, so tests can assert on
+ * what a user sees rather than on exact escape strings.
+ */
+function emulate(initial: string[], data: string): string[] {
+  const lines = [...initial];
+  let row = lines.length;
+  let col = 0;
+  const line = () => {
+    while (lines.length <= row) lines.push('');
+    return lines[row];
+  };
+  const re = /\x1b\[([?<=>\d;]*)([A-Za-z])|\r|\n|[^\x1b\r\n]/g;
+  for (const [token, params, final] of data.matchAll(re)) {
+    if (token === '\r') col = 0;
+    else if (token === '\n') row++;
+    else if (final !== undefined) {
+      if (/^[?<=>]/.test(params)) continue;
+      const n = params === '' ? 1 : Number(params);
+      if (final === 'A') row = Math.max(0, row - n);
+      else if (final === 'B') row += n;
+      else if (final === 'K') lines[row] = (line(), '');
+      else if (final === 'J') lines.length = Math.min(lines.length, row + 1), (lines[row] = line().slice(0, col));
+      else if (final === 'L') lines.splice(row, 0, ...Array(n).fill(''));
+    } else {
+      const current = line().padEnd(col);
+      lines[row] = current.slice(0, col) + token + current.slice(col + 1);
+      col++;
+    }
+  }
+  return lines.map((l) => l.trimEnd());
+}
+
+describe('StandardRenderer inline mode', () => {
+  const { StandardRenderer } = require('../src/renderer.js');
+
+  function setup() {
+    const output = new PassThrough();
+    let data = '';
+    output.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+    const r = new StandardRenderer(output, 80, 24);
+    r.start();
+    const frame = (view: string) => {
+      r.render(view);
+      r.flush(false);
+    };
+    // `after` is what the shell writes once the program exits.
+    return { r, frame, screen: (after = '') => emulate(['$ shell output'], data + after) };
+  }
+
+  test('re-rendering keeps the lines above the program', () => {
+    const { r, frame, screen } = setup();
+    frame('one\ntwo\nthree');
+    frame('one\ntwo\nTHREE');
+    frame('uno\ndos\ntres');
+    r.close();
+    expect(screen()).toEqual(['$ shell output', 'uno', 'dos', 'tres']);
+  });
+
+  test('a shorter frame clears the leftover lines', () => {
+    const { r, frame, screen } = setup();
+    frame('a\nb\nc');
+    frame('a');
+    r.close();
+    expect(screen().filter(Boolean)).toEqual(['$ shell output', 'a']);
+  });
+
+  test('closing leaves the shell prompt on its own line', () => {
+    for (const [view, expected] of [
+      ['Count: 3\nPress q to quit.', ['$ shell output', 'Count: 3', 'Press q to quit.', '$ next']],
+      ['Count: 3\nPress q to quit.\n', ['$ shell output', 'Count: 3', 'Press q to quit.', '$ next']],
+    ] as const) {
+      const { r, frame, screen } = setup();
+      frame(view);
+      r.close();
+      expect(screen('$ next')).toEqual([...expected]);
+    }
+  });
+
+  test('insertAbove prints above the frame without losing it', () => {
+    const { r, frame, screen } = setup();
+    frame('frame 1\nframe 2');
+    r.insertAbove('printed');
+    frame('frame 1\nframe 2!');
+    r.close();
+    expect(screen()).toEqual(['$ shell output', 'printed', 'frame 1', 'frame 2!']);
+  });
+});

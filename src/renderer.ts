@@ -116,7 +116,13 @@ export class StandardRenderer implements Renderer {
       if (view.backgroundColor) out += ansi.resetBackgroundColor;
       out += ansi.showCursor;
     }
-    if (this.altScreen) out += ansi.exitAltScreen;
+    if (this.altScreen) {
+      out += ansi.exitAltScreen;
+    } else if (this.linesRendered > 0) {
+      // Leave the shell prompt on its own line. A view ending in "\n" already
+      // ends on an empty line, which the prompt can reuse.
+      out += this.lastLines[this.lastLines.length - 1] === '' ? '\r' : '\r\n';
+    }
     this.write(out);
     this.altScreen = false;
     this.useAltScreen = false;
@@ -191,9 +197,7 @@ export class StandardRenderer implements Renderer {
       if (view.cursor) out += ansi.hideCursor;
 
       // Move cursor up to the start of the previously rendered content
-      if (this.linesRendered > 0) {
-        out += `\r${ansi.cursorUp(this.linesRendered)}`;
-      }
+      out += this.toTopOfFrame();
 
       for (let i = 0; i < newLines.length; i++) {
         if (i > 0) out += '\r\n';
@@ -224,6 +228,15 @@ export class StandardRenderer implements Renderer {
     this.lastView = view.clone();
   }
 
+  /**
+   * Moves from the end of the inline frame (the cursor rests on its last
+   * line, with no trailing newline) to the start of its first line.
+   */
+  private toTopOfFrame(): string {
+    if (this.linesRendered === 0) return '';
+    return this.linesRendered > 1 ? `\r${ansi.cursorUp(this.linesRendered - 1)}` : '\r';
+  }
+
   reset(): void {
     this.lastFrame = '';
     this.lastLines = [];
@@ -237,21 +250,17 @@ export class StandardRenderer implements Renderer {
   insertAbove(s: string): void {
     if (this.altScreen) return; // no-op in alt screen
 
-    let out = '';
-
-    // Move to start of rendered area
-    if (this.linesRendered > 0) {
-      out += `\r${ansi.cursorUp(this.linesRendered)}`;
-    }
-
-    // Insert the line
-    out += ansi.insertLines(1);
-    out += s;
-    out += '\r\n';
-
-    // Move back down to where we were
-    if (this.linesRendered > 0) {
-      out += ansi.cursorDown(this.linesRendered);
+    // Overwrite the frame with the line and redraw the frame below it.
+    // Inserting a line instead would push the frame's last line off the
+    // bottom of the screen.
+    let out = this.toTopOfFrame() + ansi.clearLine + s;
+    if (this.linesRendered > 0 && this.lastLines.length === this.linesRendered) {
+      for (const line of this.lastLines) out += '\r\n' + ansi.clearLine + line;
+    } else {
+      // No frame to redraw (e.g. after repaint()); the next flush draws it
+      // below the line.
+      out += '\r\n' + ansi.clearToEndOfScreen;
+      this.linesRendered = 0;
     }
 
     this.write(out);
