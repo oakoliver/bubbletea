@@ -4,6 +4,8 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 
 <img alt="A shopping-list program built with @oakoliver/bubbletea: the cursor moves through three items and space toggles their checkboxes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/shopping-list.gif" width="600">
 
+**Read the article:** [Getting Started with Bubble Tea in TypeScript](https://engineering.oakoliver.com/articles/getting-started-bubbletea-typescript-terminal-apps) · [Porting Bubble Tea from Go to TypeScript](https://engineering.oakoliver.com/articles/porting-go-bubbletea-to-typescript-elm-architecture-tui-framework)
+
 ## Features
 
 - Full Elm Architecture: `init`, `update`, `view` lifecycle
