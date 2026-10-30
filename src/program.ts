@@ -311,6 +311,7 @@ export class Program {
   private _msgQueue: Msg[] = [];
   private _msgResolve: (() => void) | null = null;
   private _eventLoopError: Error | null = null;
+  private _panics: unknown[] = [];
 
   constructor(model: Model, ...opts: ProgramOption[]) {
     this._initialModel = model;
@@ -357,6 +358,7 @@ export class Program {
       return await this._run();
     } finally {
       this._running = false;
+      this._reportPanics();
       this._finished.resolve();
     }
   }
@@ -1063,14 +1065,23 @@ export class Program {
 
   private _recoverFromPanic(err: unknown): void {
     this._eventLoopError = ErrProgramPanic;
-    const msg = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? err.stack : '';
-    process.stderr.write(`Caught panic:\r\n\r\n${msg}\r\n\r\n`);
-    if (stack) {
-      process.stderr.write(`${stack.replace(/\n/g, '\r\n')}\r\n`);
-    }
-    process.stderr.write('Restoring terminal...\r\n\r\n');
+    // Like Go, report the panic after the terminal is restored: text written
+    // now would vanish with the alternate screen.
+    this._panics.push(err);
+    if (!this._running) this._reportPanics();
     this.kill();
+  }
+
+  private _reportPanics(): void {
+    for (const err of this._panics.splice(0)) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : '';
+      process.stderr.write(`Caught panic:\r\n\r\n${msg}\r\n\r\n`);
+      if (stack) {
+        process.stderr.write(`${stack.replace(/\n/g, '\r\n')}\r\n`);
+      }
+      process.stderr.write('Restoring terminal...\r\n\r\n');
+    }
   }
 
   // ── Shutdown ──────────────────────────────────────────────────────────

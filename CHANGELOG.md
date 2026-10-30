@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1
+
+### Fixed
+
+- **Crash reports survive the alternate screen.** When `update`, a command or a mouse handler threw, the error and its stack were written to stderr before the terminal was restored, so in a full-screen program they vanished with the alternate screen and only `program experienced a panic` was left. They are now printed after the terminal is restored, as Bubble Tea does in Go. `run()` still rejects with `ErrProgramPanic`.
+- **`ProgramError` no longer prints `cause: undefined`.** `cause` is set only when one is given.
+
 ## 1.2.0 — parity with Bubble Tea v2.0.10
 
 Syncs with upstream [v2.0.9](https://github.com/charmbracelet/bubbletea/releases/tag/v2.0.9) and [v2.0.10](https://github.com/charmbracelet/bubbletea/releases/tag/v2.0.10).

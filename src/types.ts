@@ -909,11 +909,11 @@ export class ExecRequestMsg {
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
 export class ProgramError extends Error {
-  constructor(
-    message: string,
-    public readonly cause?: Error,
-  ) {
-    super(message);
+  declare readonly cause?: Error;
+
+  constructor(message: string, cause?: Error) {
+    // Only set cause when there is one, so errors don't print `cause: undefined`.
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'ProgramError';
   }
 }
