@@ -6,6 +6,53 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 
 **Read the article:** [Getting Started with Bubble Tea in TypeScript](https://engineering.oakoliver.com/articles/getting-started-bubbletea-typescript-terminal-apps) · [Porting Bubble Tea from Go to TypeScript](https://engineering.oakoliver.com/articles/porting-go-bubbletea-to-typescript-elm-architecture-tui-framework)
 
+## Larger Examples
+
+Five full-screen programs in [`examples/`](examples/) combine Bubble Tea with our ports of [Bubbles](https://github.com/oakoliver/bubbles), [Lip Gloss](https://github.com/oakoliver/lipgloss) and [Glamour](https://github.com/oakoliver/glamour). To run them, see [Running the larger examples](#running-the-larger-examples).
+
+### chat.ts: a streaming coding-agent chat
+
+<img alt="examples/chat.ts: a prompt is sent, two tool calls run with spinners and finish with a check mark and a duration, and a Markdown answer with a numbered list and a code block streams in. Page up mid-stream switches the header to scrolled and counts the new lines below; tab expands the tool output; page down follows the answer again" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/chat.gif" width="700">
+
+A scripted coding agent (no network, no API key) with tool calls, collapsible tool output, three themes and Markdown answers streamed token by token through Glamour. The transcript is rendered the way OpenCode's Bubble Tea TUI did it: each finished part is rendered once and cached under a hash of its inputs, only the part still streaming is re-rendered, and the view follows new output only while you are at the bottom. Walkthrough: [How OpenCode Renders Messages in Bubble Tea](https://engineering.oakoliver.com/articles/how-opencode-renders-messages-in-bubble-tea).
+
+### sysmon.ts: an htop-style system monitor
+
+<img alt="examples/sysmon.ts in demo mode: per-core CPU bars and a CPU history chart move, a memory gauge and load average sit beside them, and the process table is sorted by memory and CPU, filtered to postgres, opened in a details pane and folded into a tree" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/sysmon.gif" width="760">
+
+Per-core CPU bars, CPU and memory history, load average and uptime from `node:os`, and a process table from `ps` that you can sort, filter, open and fold into a tree. Read-only: it has no kill or signal features. `--demo` shows invented data, as in the recording.
+
+### kanban.ts: a board with dialogs and mouse support
+
+<img alt="examples/kanban.ts: a card moves from To do to In progress with a flash, a New card dialog opens over the dimmed board and adds Write the changelog, the filter narrows the board to docs cards, a card is deleted after a confirmation dialog, and the help overlay opens and closes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/kanban.gif" width="760">
+
+Three columns of cards, a live filter, new, edit and delete dialogs drawn as Lip Gloss layers over the dimmed board, and the mouse: click to select, wheel to scroll a column, drag a card to another column. `--file board.json` saves the board after every change.
+
+### blocks.ts: a falling-blocks game
+
+<img alt="examples/blocks.ts --autoplay: a small AI moves and rotates pieces step by step in a 10 by 20 well with a ghost piece, a hold box, a three-piece preview and a stats panel, and clears several lines" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/blocks.gif" width="520">
+
+SRS rotation with wall kicks, a 7-bag randomiser, lock delay, hold, a ghost piece, a three-piece preview, levels and a line-clear animation, all driven by one `Tick`. `--autoplay` lets a small heuristic AI play, and `--seed N` repeats a game.
+
+### mission-control.ts: a dashboard
+
+<img alt="examples/mission-control.ts: a ports table, simulated test runs with streaming progress bars, tests-per-port and lines-changed bar charts, and an event log that fills as each run finishes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/mission-control.gif" width="800">
+
+A ports table, test runs with streaming progress bars, bar charts and an event log, on invented data or, with `--live`, on real checkouts of the Charm ports.
+
+### Running the larger examples
+
+They import this repository's source and the sibling ports by name. The ports are not dependencies of `bubbletea`, so install them without touching `package.json`:
+
+```bash
+git clone https://github.com/oakoliver/bubbletea && cd bubbletea
+bun install
+bun add --no-save @oakoliver/bubbles @oakoliver/lipgloss @oakoliver/glamour
+bun examples/chat.ts            # also: sysmon.ts --demo, kanban.ts, blocks.ts --autoplay, mission-control.ts
+```
+
+Keys, flags and details for each one are in [`examples/README.md`](examples/README.md).
+
 ## Features
 
 - Full Elm Architecture: `init`, `update`, `view` lifecycle
@@ -95,6 +142,8 @@ bun examples/countdown.ts      # Tick, Sequence and Println
 bun examples/keys.ts           # how KeyPressMsg describes each key
 bun examples/window-size.ts    # alt screen + WindowSizeMsg
 ```
+
+The full-screen programs are listed under [Larger Examples](#larger-examples).
 
 The README recordings are made with [@oakoliver/vhs](https://github.com/oakoliver/vhs) from the tapes in [`assets/tapes/`](assets/tapes/).
 
