@@ -59,13 +59,7 @@ bun add --no-save @oakoliver/bubbles @oakoliver/lipgloss @oakoliver/glamour
 bun examples/chat.ts            # also: sysmon.ts --demo, kanban.ts, blocks.ts --autoplay, mission-control.ts
 ```
 
-The station needs five more ports, which are not on npm yet. From checkouts of them next to this one:
-
-```bash
-bun add --no-save file:../bubblezone file:../ntcharts file:../wish file:../freeze file:../teatest
-```
-
-Once they are published:
+The station needs five more ports:
 
 ```bash
 bun add --no-save @oakoliver/bubblezone @oakoliver/ntcharts @oakoliver/wish @oakoliver/freeze @oakoliver/teatest
