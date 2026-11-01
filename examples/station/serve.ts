@@ -16,7 +16,7 @@ import { NewProgram, type Program, WindowSizeMsg } from '@oakoliver/bubbletea';
 import { type Middleware, NewServer, type Server, type Session, WithAddress, WithHostKeyPath, WithIdleTimeout, WithMiddleware, log, logging, ratelimiter } from '@oakoliver/wish';
 import * as bubbletea from '@oakoliver/wish/bubbletea';
 import { Demo, SCRIPTS } from './demo.ts';
-import { snapshotPNG, snapshotSVG } from './snapshot.ts';
+import { snapshotPNGAsync, snapshotSVG } from './snapshot.ts';
 import { MIN_H, MIN_W, Station, WorldChanged } from './station.ts';
 import type { Viewer, World } from './world.ts';
 
@@ -76,7 +76,8 @@ export function newStationServer(world: World, opts: ServeOptions): Server {
       return;
     }
     const frame = snapshotFrame(world, w, h);
-    const bytes = png ? snapshotPNG(frame, 1) : snapshotSVG(frame);
+    // PNGs are drawn at freeze's normal 4x on a worker thread, so other sessions keep running.
+    const bytes = png ? await snapshotPNGAsync(frame) : snapshotSVG(frame);
     if (!bytes) {
       s.stderr().write('PNG needs @resvg/resvg-js on the server; ask for an SVG instead\n');
       await s.exit(2);
