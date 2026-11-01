@@ -16,6 +16,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Msg, WithFilter } from '@oakoliver/bubbletea';
+import { hasResvg } from '@oakoliver/freeze';
 import { stripAnsi } from '@oakoliver/lipgloss';
 import { NewTestModel, RequireEqualOutput, type TestModel, WaitFor, WithDuration, WithInitialTermSize, WithProgramOptions } from '@oakoliver/teatest';
 import * as testsession from '@oakoliver/wish/testsession';
@@ -218,6 +219,20 @@ describe('snapshots', () => {
 
     const other = await testsession.New(srv);
     await expect(other.output('reboot')).rejects.toThrow('status 2');
+  });
+
+  test.if(hasResvg())('over SSH, `snapshot png` draws at 4x without freezing the other sessions', async () => {
+    const world = new World(7);
+    const srv = newStationServer(world, { port: 0, hostKeyPath: join(tmpdir(), 'station-test-host-key') });
+    const sess = await testsession.New(srv);
+    // resvg takes about a second at 4x; a timer keeps ticking meanwhile only if it is not blocking this thread.
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 10);
+    const png = await sess.output('snapshot png');
+    clearInterval(timer);
+    expect([...png.subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47]); // PNG
+    expect(png.readUInt32BE(16)).toBeGreaterThan(4000); // IHDR width: 4x of a 120-column frame
+    expect(ticks).toBeGreaterThanOrEqual(10);
   });
 
   test('over SSH, a session with a terminal joins the shared world', async () => {
