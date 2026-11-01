@@ -8,7 +8,7 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 
 ## Larger Examples
 
-Five full-screen programs in [`examples/`](examples/) combine Bubble Tea with our ports of [Bubbles](https://github.com/oakoliver/bubbles), [Lip Gloss](https://github.com/oakoliver/lipgloss) and [Glamour](https://github.com/oakoliver/glamour). To run them, see [Running the larger examples](#running-the-larger-examples).
+Six full-screen programs in [`examples/`](examples/) combine Bubble Tea with our ports of [Bubbles](https://github.com/oakoliver/bubbles), [Lip Gloss](https://github.com/oakoliver/lipgloss) and [Glamour](https://github.com/oakoliver/glamour), and one of them with five more. To run them, see [Running the larger examples](#running-the-larger-examples).
 
 ### chat.ts: a streaming coding-agent chat
 
@@ -40,6 +40,14 @@ SRS rotation with wall kicks, a 7-bag randomiser, lock delay, hold, a ghost piec
 
 A ports table, test runs with streaming progress bars, bar charts and an event log, on invented data or, with `--live`, on real checkouts of the Charm ports.
 
+### station: an ops dashboard shared over SSH
+
+<img alt="examples/station over SSH: alice connects with ssh and sees six invented services, a latency chart, an error heatmap and a deploys bar chart; bob, a second SSH user, appears in the header, his pointer moves across alice's screen and his selection marks the search row. A payments latency alert opens and alice acknowledges it; she zooms the latency chart and changes its window with the wheel; a search error alert opens and bob acknowledges it from his session; alice clicks the heatmap and the deploys tab. Then a single ssh command saves the station as station.svg" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/station.gif" width="800">
+
+Five more ports work together in [`examples/station/`](examples/station/): [ntcharts](https://github.com/oakoliver/ntcharts) draws a latency time series, a requests-per-second stream, sparklines, an error-rate heatmap and a deploys bar chart; [bubblezone](https://github.com/oakoliver/bubblezone) makes tabs, rows, buttons, heatmap rows and bars clickable; [wish](https://github.com/oakoliver/wish) serves one shared station to every SSH session (`--serve`), so people see each other's pointers and acknowledge alerts together; [freeze](https://github.com/oakoliver/freeze) saves the screen as SVG and PNG (`s` locally, `ssh -p 2323 localhost snapshot > station.svg` over SSH); and [teatest](https://github.com/oakoliver/teatest) runs golden-file tests of the main flows, clicks included. The services and their numbers are invented and seeded; the header says SIMULATED. The pointers in the recording are scripted (`--demo`), since a recorder cannot click.
+
+<img alt="A freeze snapshot of the station: the services table with sparklines, an open payments alert, the log, the payments latency chart crossing its objective, the error heatmap and the deploys bar chart, in a window with rounded corners and a shadow" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/station.svg" width="800">
+
 ### Running the larger examples
 
 They import this repository's source and the sibling ports by name. The ports are not dependencies of `bubbletea`, so install them without touching `package.json`:
@@ -49,6 +57,27 @@ git clone https://github.com/oakoliver/bubbletea && cd bubbletea
 bun install
 bun add --no-save @oakoliver/bubbles @oakoliver/lipgloss @oakoliver/glamour
 bun examples/chat.ts            # also: sysmon.ts --demo, kanban.ts, blocks.ts --autoplay, mission-control.ts
+```
+
+The station needs five more ports, which are not on npm yet. From checkouts of them next to this one:
+
+```bash
+bun add --no-save file:../bubblezone file:../ntcharts file:../wish file:../freeze file:../teatest
+```
+
+Once they are published:
+
+```bash
+bun add --no-save @oakoliver/bubblezone @oakoliver/ntcharts @oakoliver/wish @oakoliver/freeze @oakoliver/teatest
+```
+
+Then:
+
+```bash
+bun examples/station/main.ts                    # in this terminal (120×34 or more; at least 100×28)
+bun examples/station/main.ts --serve            # then, from several terminals: ssh -p 2323 <name>@localhost
+ssh -p 2323 localhost snapshot > station.svg    # while it serves: an image of the current state
+bun test ./examples/station/station.test.ts     # its golden-file tests
 ```
 
 Keys, flags and details for each one are in [`examples/README.md`](examples/README.md).

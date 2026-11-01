@@ -24,6 +24,9 @@ bun examples/sysmon.ts [--demo]       # htop-style system monitor (Bubbles, Lip 
 bun examples/kanban.ts [--file F]     # kanban board with dialogs and mouse (Bubbles, Lip Gloss)
 bun examples/blocks.ts [--autoplay]   # falling-blocks game (Lip Gloss)
 bun examples/mission-control.ts       # dashboard (Bubbles, Lip Gloss)
+bun examples/station/main.ts [--serve] [--demo]
+                                      # ops dashboard shared over SSH (ntcharts, bubblezone,
+                                      # wish, freeze, teatest, Lip Gloss)
 ```
 
 ### Dependencies
@@ -142,3 +145,69 @@ exports of both `main` and the branch tip, so the checkouts themselves are
 never modified. `main` is installed from its own lockfile; the branch tip uses
 the repo's `node_modules`, so install whatever sibling versions that branch
 requires there first.
+
+## station/
+
+An ops dashboard for six invented services that several people can share
+over SSH. It is the one example that uses five more ports, each doing the part
+it was written for:
+
+| Port | What it does here |
+| --- | --- |
+| [`@oakoliver/ntcharts`](https://github.com/oakoliver/ntcharts) | The selected service's p95 latency against its objective (time series), its requests per second (streaming line, zoomed latency view), a sparkline per service, the error rate of every service per minute (heatmap) and today's deploys (horizontal bar chart). |
+| [`@oakoliver/bubblezone`](https://github.com/oakoliver/bubblezone) | Every click: tabs, service rows, `ack`, `zoom`/`back`, the window buttons, heatmap rows (through `pos()`), bars (the bar chart marks its own zone and `barDataFromPoint()` names the bar), the log and the latency chart for the wheel. Each viewer has its own manager. |
+| [`@oakoliver/wish`](https://github.com/oakoliver/wish) | `--serve`: one Bubble Tea program per SSH session on one shared World, built with `MiddlewareWithProgramHandler`; a `snapshot` command for sessions without a terminal; a rate limiter and an idle timeout. |
+| [`@oakoliver/freeze`](https://github.com/oakoliver/freeze) | `s` (or the `snapshot` button) writes the current frame as `station-HHMMSS.svg`, plus a 4x PNG when `@resvg/resvg-js` is installed. Over SSH, `ssh -p 2323 localhost snapshot > station.svg` (or `snapshot png`, or `snapshot 160x44`) renders the shared state. |
+| [`@oakoliver/teatest`](https://github.com/oakoliver/teatest) | [`station.test.ts`](station/station.test.ts): golden files of the overview, the latency view, a mouse flow and a two-viewer flow, at 120×34; clicks are SGR mouse bytes written to the program's input. |
+
+```sh
+bun examples/station/main.ts                     # this terminal
+bun examples/station/main.ts --serve             # ssh -p 2323 <name>@localhost, from as many terminals as you like
+ssh -p 2323 localhost snapshot > station.svg     # an image of the current state, no terminal needed
+bun test ./examples/station/station.test.ts      # UPDATE_GOLDEN=1 to rewrite the golden files
+```
+
+Flags: `--serve`, `--port N` (2323), `--seed N` (7), `--out DIR` (where `s`
+writes; default the current directory), `--demo` (a scripted mouse for
+recordings: locally, and over SSH for the users `alice` and `bob`).
+
+Keys: `↑`/`↓` service · `tab` or `1`-`4` view · `esc` overview · `a`
+acknowledge the selected service's alert · `w` latency window · `space`
+pause for everyone · `s` snapshot · `pgup`/`pgdn` log · `q` quit. Mouse:
+click tabs, rows, `ack`, `zoom`, window buttons, heatmap rows and bars; the
+wheel scrolls the log and zooms the latency chart.
+
+**The data is invented.** A seeded PRNG drives six made-up services, with a
+scripted incident every minute of real time (a slow payments database, a bad
+search release and its rollback). Nothing is read from this machine or the
+network. One step of station time is five seconds, taken every 400 ms; over
+SSH the clock only runs while someone is connected.
+
+**Sharing.** Everything people share lives in one `World`: samples, alerts,
+deploys, the log, and each viewer's selection and pointer. A pointer is
+stored as a zone ID and a cell inside that zone, not as screen coordinates,
+so another viewer's pointer lands on the same row or button even when the
+two windows have different sizes. User names are cleaned of control
+characters before anyone else sees them.
+
+**Security.** The server listens on `127.0.0.1` and lets every SSH client in;
+the user name is only a name. Add authentication (`WithAuthorizedKeys`) before
+binding it anywhere else. The host key is written to `.ssh/station_ed25519`.
+
+**Snapshots.** An SVG of a 120×34 frame takes about 11 ms. resvg draws PNGs
+synchronously, about 1.2 s at freeze's default 4x and 0.3 s at 1x, so the SSH
+command draws PNGs at 1x to keep other sessions responsive.
+
+**Dependencies.** The station imports Bubble Tea by package name, like an
+application, not from `../src`, and has its own `package.json` so that the
+name does not resolve to this repository. wish and teatest create the
+`Program` with the Bubble Tea they import; a second copy from `../src` would
+not recognise their messages (`instanceof` fails across copies) or the
+station's `Quit`. Install the ports as shown in the top-level README's
+[Running the larger examples](../README.md#running-the-larger-examples).
+`bunfig.toml` keeps a plain `bun test` to `tests/`, so the repository's own
+suite does not need these packages.
+
+The recording is made with `assets/tapes/station.tape`; a background script,
+`assets/tapes/station-bot.ts`, keeps bob's SSH session open while the
+server's demo script moves his pointer.

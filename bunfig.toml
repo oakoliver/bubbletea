@@ -1,0 +1,4 @@
+[test]
+# examples/station has its own tests, which need packages that are not
+# dependencies of this one: run them with bun test ./examples/station/station.test.ts
+root = "tests"
