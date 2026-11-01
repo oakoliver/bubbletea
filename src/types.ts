@@ -747,6 +747,9 @@ export class EnvMsg {
 }
 
 export enum ColorProfile {
+  /** Not a terminal: no styles and no hyperlinks are written. */
+  NoTTY = 'notty',
+  /** No colours, but text attributes (bold, italic, underline...) stay. */
   Ascii = 'ascii',
   ANSI = 'ansi',
   ANSI256 = 'ansi256',

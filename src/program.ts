@@ -60,6 +60,7 @@ import {
 } from './types.js';
 import { type Renderer, StandardRenderer, NilRenderer } from './renderer.js';
 import { InputDecoder } from './input.js';
+import { detectColorProfile } from './colorprofile.js';
 import { Printf as PrintfCommand, Println as PrintlnCommand } from './commands.js';
 import * as ansi from './ansi.js';
 
@@ -211,7 +212,12 @@ export function WithAltScreen(): ProgramOption {
   };
 }
 
-/** Forces the color profile reported to the model. */
+/**
+ * Sets the colour profile the program uses instead of detecting it. The
+ * profile is reported to the model with a `ColorProfileMsg`, and the renderer
+ * writes every frame in it: 24-bit colours become 256 or 16 colours, `Ascii`
+ * drops colours but keeps text attributes, and `NoTTY` drops all styling.
+ */
 export function WithColorProfile(profile: ColorProfile): ProgramOption {
   return (p) => {
     mutableOptions(p)._colorProfile = profile;
@@ -419,6 +425,36 @@ export class Program {
     await this._finished.promise;
   }
 
+  /**
+   * Resolves once the program is idle: every message queued so far has been
+   * handled (including messages that synchronous commands sent in response),
+   * input bytes that were waiting to be told apart (a lone ESC) have been
+   * decoded, and the frame for the resulting model has been written to the
+   * output. Commands that wait on timers or I/O are not waited for.
+   *
+   * Not part of Go's API: it is for tests (teatest's `settle()`) and for
+   * hosts that need the screen to match the model at a given point.
+   * Resolves immediately when the program is not running.
+   */
+  async settle(): Promise<void> {
+    const turn = () =>
+      new Promise<void>((resolve) =>
+        typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0),
+      );
+    do {
+      // Let input streams deliver what was written and commands finish their microtasks.
+      await turn();
+      if (!this._running || this._killed) return;
+      if (this._inputFlushTimer) {
+        clearTimeout(this._inputFlushTimer);
+        this._inputFlushTimer = null;
+        for (const msg of this._inputDecoder.flush()) this._enqueueMsg(msg);
+      }
+      // Idle: nothing queued and the event loop is waiting for the next message.
+    } while (this._msgQueue.length > 0 || this._msgResolve === null);
+    this._renderer?.flush(false);
+  }
+
   /** Release raw mode and terminal ownership for an interactive subprocess. */
   releaseTerminal(): void {
     if (!this._running || this._terminalReleased) return;
@@ -460,6 +496,10 @@ export class Program {
       this._height = size.height;
     }
 
+    // Get the colour profile: from the output (is it a terminal?) and the
+    // environment, as Go's colorprofile.Detect, unless WithColorProfile set one.
+    this._colorProfile ??= detectColorProfile(this._output as { isTTY?: boolean }, this._environment);
+
     // Set up renderer
     if (this._disableRenderer) {
       this._renderer = new NilRenderer();
@@ -470,6 +510,7 @@ export class Program {
         this._height,
       );
       r.setNoInput(this._disableInput);
+      r.setColorProfile(this._colorProfile);
       this._renderer = r;
     }
 
@@ -488,7 +529,6 @@ export class Program {
     if (!this._disableRenderer && shouldQuerySynchronizedOutput(this._environment)) {
       this._executeQuery(ansi.requestSyncOutputMode + ansi.requestUnicodeCoreMode);
     }
-    this._colorProfile ??= detectColorProfile(this._environment);
     this._enqueueMsg(new ColorProfileMsg(this._colorProfile));
     this._enqueueMsg(new WindowSizeMsg(this._width, this._height));
     this._enqueueMsg(new EnvMsg(this._environment));
@@ -623,6 +663,8 @@ export class Program {
     if (msg instanceof ExecRequestMsg) {
       await this._executeInteractive(msg.command, msg.callback);
     }
+    // As in Go, a terminal that reports RGB/Tc upgrades the profile reported to
+    // the model; the renderer keeps the profile it started with.
     if (msg instanceof CapabilityMsg && (msg.content === 'RGB' || msg.content === 'Tc')) {
       if (this._colorProfile !== ColorProfile.TrueColor) {
         this._colorProfile = ColorProfile.TrueColor;
@@ -1113,15 +1155,6 @@ function withResolvers<T>(): PromiseWithResolvers<T> {
   return { promise, resolve, reject };
 }
 
-
-function detectColorProfile(environment: readonly string[]): ColorProfile {
-  const env = new EnvMsg(environment);
-  if (env.lookupEnv('NO_COLOR')[1] || env.getenv('TERM') === 'dumb') return ColorProfile.Ascii;
-  const colorTerm = env.getenv('COLORTERM').toLowerCase();
-  if (colorTerm === 'truecolor' || colorTerm === '24bit') return ColorProfile.TrueColor;
-  if (env.getenv('TERM').includes('256color')) return ColorProfile.ANSI256;
-  return ColorProfile.ANSI;
-}
 interface PromiseWithResolvers<T> {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;

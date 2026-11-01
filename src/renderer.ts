@@ -4,7 +4,9 @@
  */
 
 import * as ansi from './ansi.js';
+import { convertForProfile } from './colorprofile.js';
 import {
+  ColorProfile,
   type Cmd,
   type MouseMsg,
   type TerminalColor,
@@ -29,6 +31,8 @@ export interface Renderer {
   repaint(): void;
   onMouse?(msg: MouseMsg): Cmd;
   setSynchronizedOutput?(enabled: boolean): void;
+  /** Sets the colour profile the frames are converted to before they are written. */
+  setColorProfile?(profile: ColorProfile): void;
 }
 
 /**
@@ -48,6 +52,7 @@ export class NilRenderer implements Renderer {
     return null;
   }
   setSynchronizedOutput(_enabled: boolean): void {}
+  setColorProfile(_profile: ColorProfile): void {}
 }
 
 /**
@@ -72,6 +77,10 @@ export class StandardRenderer implements Renderer {
   private synchronizedOutput = false;
   /** Whether input is disabled, in which case keyboard enhancement queries are pointless. */
   private noInput = false;
+  /** The profile frames are converted to. TrueColor writes them as they are. */
+  private colorProfile: ColorProfile = ColorProfile.TrueColor;
+  /** The last frame converted for the profile, so an unchanged frame is not converted again. */
+  private converted: { content: string; profile: ColorProfile; frame: string } | null = null;
   constructor(output: NodeJS.WritableStream, width: number, height: number) {
     this.output = output;
     this.width = width;
@@ -134,6 +143,27 @@ export class StandardRenderer implements Renderer {
     this.started = false;
   }
 
+  /**
+   * Sets the colour profile that frames are written in, as Go's renderer does
+   * with `setColorProfile`: colours outside the profile are converted to the
+   * nearest it has (TrueColor to 256 or 16 colours), `Ascii` drops colours but
+   * keeps attributes, and `NoTTY` drops every style and hyperlink.
+   */
+  setColorProfile(profile: ColorProfile): void {
+    if (profile === this.colorProfile) return;
+    this.colorProfile = profile;
+    this.repaint();
+  }
+
+  /** The frame's content in the renderer's colour profile. */
+  private frameFor(content: string): string {
+    const c = this.converted;
+    if (c && c.content === content && c.profile === this.colorProfile) return c.frame;
+    const frame = convertForProfile(content, this.colorProfile);
+    this.converted = { content, profile: this.colorProfile, frame };
+    return frame;
+  }
+
   render(view: string | View): void {
     if (!this.started) return;
     const normalized = typeof view === 'string' ? new View(view) : view.clone();
@@ -149,7 +179,7 @@ export class StandardRenderer implements Renderer {
     this.dirty = false;
 
     const view = this.currentView;
-    const frame = view.content;
+    const frame = this.frameFor(view.content);
     let out = this.renderViewTransitions(view, closing);
 
     if (

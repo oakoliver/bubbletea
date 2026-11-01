@@ -1,6 +1,6 @@
 # @oakoliver/bubbletea
 
-Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.2.0 targets API and behavior parity with upstream **Bubble Tea v2.0.10**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
+Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.3.0 targets API and behavior parity with upstream **Bubble Tea v2.0.10**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
 
 <img alt="A shopping-list program built with @oakoliver/bubbletea: the cursor moves through three items and space toggles their checkboxes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/shopping-list.gif" width="600">
 
@@ -232,6 +232,20 @@ const p = new Program(
 
 With input disabled (`WithInput(null)`), no terminal query is ever sent, since the reply could not be read and would otherwise leak into the shell after exit: `RequestBackgroundColor`, `RequestForegroundColor`, `RequestCursorColor`, `RequestCursorPosition`, `ReadClipboard`, `ReadPrimaryClipboard`, `RequestCapability`, `RequestTerminalVersion`, `RequestWindowSize` (when the output stream has no dimensions), the startup mode probe, and the Kitty keyboard enhancement protocol are all skipped.
 
+As in Go, the startup probe (synchronized output and unicode core mode, `CSI ? 2026 $ p` and `CSI ? 2027 $ p`) depends on the environment, not on whether the output is a terminal: it is written unless input is disabled, `TERM_PROGRAM` names Apple Terminal, or `SSH_TTY` is set (with exceptions for Windows Terminal, ghostty, wezterm, alacritty, kitty and rio). Pass `WithEnvironment` to make it deterministic, for example in tests.
+
+### Colour profiles
+
+Every frame is written in the program's colour profile, as Bubble Tea's renderer does in Go. Views can use 24-bit colours freely: on a 256-colour terminal they become the nearest of the 256 colours, on a 16-colour terminal the nearest ANSI colour, with `Ascii` colours are dropped but bold, italic and underline stay, and with `NoTTY` nothing but the text is written. Lines printed with `println`/`printf` are written as given, as in Go.
+
+The profile is detected at startup from the output and the environment, following Go's `colorprofile.Detect`:
+
+- An output that is not a terminal (a pipe, a file, a stream that is not a TTY) is `NoTTY`, unless `TTY_FORCE` or `CLICOLOR_FORCE` is true. `TERM=dumb` or no `TERM` is `NoTTY` too.
+- `NO_COLOR` set to a true value (`1`, `true`, `t`) limits a terminal to `Ascii`.
+- Otherwise `COLORTERM`, `TERM`, `WT_SESSION`, `GOOGLE_CLOUD_SHELL` and `TMUX` decide. Unlike Go, the terminfo database and `tmux info` are not read.
+
+`WithColorProfile(profile)` skips detection. A program whose output is a stream that stands for a terminal (an SSH channel, a web terminal) should pass the profile of that terminal, as `@oakoliver/wish` does. The detected or forced profile is reported to the model with a `ColorProfileMsg`.
+
 ## Key Input
 
 `KeyPressMsg` carries the parsed key event:
@@ -314,6 +328,7 @@ ac.abort(); // Program exits with ErrProgramKilled
 - `program.quit(): void` — Send a `QuitMsg`.
 - `program.kill(): void` — Immediately kill the program.
 - `program.wait(): Promise<void>` — Wait until the program finishes.
+- `program.settle(): Promise<void>` — Resolve once every queued message has been handled and its frame written (not in Go; for tests).
 - `program.releaseTerminal()` / `program.restoreTerminal()` — Temporarily hand terminal ownership to an interactive process.
 - `program.println(...)` / `program.printf(...)` — Print unmanaged lines above an inline view.
 

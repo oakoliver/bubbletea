@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0
+
+### Changed
+
+- **Frames are written in the program's colour profile.** As in Go, where the renderer converts every cell to the profile, the renderer now downsamples the colours of each frame: 24-bit colours become the nearest of the 256 colours (`ANSI256`) or of the 16 ANSI colours (`ANSI`), `Ascii` drops colours but keeps bold, italic and underline, and `NoTTY` writes no styles or hyperlinks at all. The conversion is a port of x/ansi's `Convert256`/`Convert16` (HSLuv distance between the colour cube and the greys). `WithColorProfile` used to change only the `ColorProfileMsg` the model received; it now also sets the profile frames are written in. Lines printed with `println`/`printf` are still written as given, as in Go.
+- **Colour profile detection follows Go's `colorprofile.Detect`.** An output that is not a terminal (`isTTY` is not true) is now `NoTTY`, so a program piped to a file or another program writes plain text, unless `TTY_FORCE` or `CLICOLOR_FORCE` is true. `NO_COLOR` is read as a Go boolean (`1`, `true`, `t`; `NO_COLOR=yes` no longer counts) and only limits a terminal to `Ascii`. `TERM=dumb` or an empty `TERM` is `NoTTY` instead of `Ascii`. `CLICOLOR`, `CLICOLOR_FORCE`, `COLORTERM=yes|true`, `*-direct` terminals, kitty, ghostty, wezterm, alacritty, foot, contour, rio, `WT_SESSION`, `GOOGLE_CLOUD_SHELL`, `TMUX` and the Windows console version are taken into account. The terminfo database and `tmux info` are not read. **If you write to a stream that stands for a terminal but is not a TTY** (an SSH channel, a web terminal), pass `WithColorProfile`, or your program's output will have no colours.
+
+### Added
+
+- `ColorProfile.NoTTY`.
+- `program.settle()`: resolves once every queued message has been handled (including follow-ups from synchronous commands and input bytes waiting to be told apart) and the frame for the resulting model has been written. Not part of Go's API; it lets test helpers such as `@oakoliver/teatest` look at the screen right after sending input.
+
+### Docs
+
+- The startup synchronized-output/unicode-core probe is written whether or not the output is a terminal, as in Go (`tea.go`, `Run` → `executeQuery`): it depends on the environment and on input being enabled. The README says how to make it deterministic.
+
 ## 1.2.2
 
 ### Fixed

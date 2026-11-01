@@ -90,6 +90,7 @@ import {
   View,
   WithColorProfile,
   WithEnvironment,
+  WithFPS,
   formatProgressBarState,
   ClearScreen,
   RequestBackgroundColor,
@@ -2409,5 +2410,159 @@ describe('StandardRenderer inline mode', () => {
     frame('frame 1\nframe 2!');
     r.close();
     expect(screen()).toEqual(['$ shell output', 'printed', 'frame 1', 'frame 2!']);
+  });
+});
+
+describe('Colour profile (Go: the renderer writes in the program profile)', () => {
+  const { convertForProfile, convert256, detectColorProfile } = require('../src/colorprofile.js');
+  const ORANGE = '\x1b[1;38;2;255;136;0morange\x1b[0m';
+
+  /** Runs a model whose view is `view` until it quits, and returns everything written. */
+  async function render(view: string, ...opts: Array<(p: Program) => void>): Promise<{ out: string; profile: ColorProfile }> {
+    const output = new PassThrough();
+    let out = '';
+    output.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    let profile: ColorProfile | null = null;
+    const model: Model = {
+      init: () => null,
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof ColorProfileMsg) profile = msg.profile;
+        return [model, msg instanceof EnvMsg ? Quit : null];
+      },
+      view: () => view,
+    };
+    await new Program(
+      model,
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(40, 5),
+      WithoutSignalHandler(),
+      WithEnvironment(['TERM=xterm-256color', 'COLORTERM=truecolor']),
+      ...opts,
+    ).run();
+    return { out, profile: profile! };
+  }
+
+  test('WithColorProfile(ANSI256) turns 24-bit colours into 256 colours', async () => {
+    const { out } = await render(ORANGE, WithColorProfile(ColorProfile.ANSI256));
+    expect(out).not.toContain('38;2;255;136;0');
+    expect(out).toContain('\x1b[1;38;5;208morange');
+  });
+
+  test('ANSI uses the 16 colours, Ascii keeps attributes only, NoTTY writes no styles', async () => {
+    expect((await render(ORANGE, WithColorProfile(ColorProfile.ANSI))).out).toContain('\x1b[1;91morange');
+    const ascii = (await render(ORANGE + ' \x1b[38;5;9mred\x1b[m', WithColorProfile(ColorProfile.Ascii))).out;
+    expect(ascii).toContain('\x1b[1morange\x1b[0m red\x1b[m');
+    const link = '\x1b]8;;https://example.com\x1b\\site\x1b]8;;\x1b\\';
+    const notty = (await render(`${ORANGE} ${link}`, WithColorProfile(ColorProfile.NoTTY))).out;
+    expect(notty).toContain('orange site');
+    expect(notty).not.toContain('\x1b[1;');
+    expect(notty).not.toContain('\x1b]8;');
+    expect((await render(ORANGE, WithColorProfile(ColorProfile.TrueColor))).out).toContain(ORANGE);
+  });
+
+  test('conversion matches x/ansi Convert256/Convert16 and keeps sub-parameters', () => {
+    expect(convert256(255, 136, 0)).toBe(208);
+    expect(convert256(10, 200, 30)).toBe(40);
+    expect(convert256(200, 100, 50)).toBe(167);
+    expect(convert256(0x5f, 0x87, 0xaf)).toBe(67); // exact cube colour
+    expect(convertForProfile('\x1b[38:2::1:2:3mx', ColorProfile.ANSI256)).toBe('\x1b[38;5;16mx');
+    expect(convertForProfile('\x1b[4:3;58;2;255;0;0mx', ColorProfile.ANSI)).toBe('\x1b[4:3;58;5;9mx');
+    expect(convertForProfile('\x1b[31;48;5;196mx', ColorProfile.ANSI)).toBe('\x1b[31;101mx');
+    expect(convertForProfile('\x1b[31;48;5;196mx', ColorProfile.ANSI256)).toBe('\x1b[31;48;5;196mx');
+    expect(convertForProfile('\x1b[2K\x1b[31mx', ColorProfile.NoTTY)).toBe('x');
+  });
+
+  test('detection follows colorprofile.Detect: an output that is not a terminal is NoTTY', async () => {
+    // The default PassThrough output is not a terminal, whatever COLORTERM says.
+    const piped = await render(ORANGE);
+    expect(piped.profile).toBe(ColorProfile.NoTTY);
+    expect(piped.out).toContain('orange');
+    expect(piped.out).not.toContain('38;');
+
+    const tty = { isTTY: true };
+    const pipe = { isTTY: false };
+    const d = (out: { isTTY: boolean }, ...env: string[]) => detectColorProfile(out, env, 'linux');
+    expect(d(tty, 'TERM=xterm-256color', 'COLORTERM=truecolor')).toBe(ColorProfile.TrueColor);
+    expect(d(tty, 'TERM=xterm-256color')).toBe(ColorProfile.ANSI256);
+    expect(d(tty, 'TERM=xterm')).toBe(ColorProfile.ANSI);
+    expect(d(tty, 'TERM=xterm-kitty')).toBe(ColorProfile.TrueColor);
+    expect(d(tty, 'TERM=tmux-256color', 'COLORTERM=truecolor')).toBe(ColorProfile.ANSI256);
+    // NO_COLOR is read as a Go bool, and only caps a terminal at Ascii.
+    expect(d(tty, 'TERM=xterm-256color', 'COLORTERM=truecolor', 'NO_COLOR=1')).toBe(ColorProfile.Ascii);
+    expect(d(tty, 'TERM=xterm-256color', 'NO_COLOR=yes')).toBe(ColorProfile.ANSI256);
+    expect(d(pipe, 'TERM=xterm-256color', 'NO_COLOR=1')).toBe(ColorProfile.NoTTY);
+    expect(d(tty, 'TERM=dumb')).toBe(ColorProfile.NoTTY);
+    expect(d(tty)).toBe(ColorProfile.NoTTY);
+    // TTY_FORCE and CLICOLOR_FORCE colour an output that is not a terminal.
+    expect(d(pipe, 'TERM=xterm-256color', 'COLORTERM=truecolor', 'TTY_FORCE=1')).toBe(ColorProfile.TrueColor);
+    expect(d(pipe, 'TERM=xterm-256color', 'CLICOLOR_FORCE=1')).toBe(ColorProfile.ANSI256);
+    expect(d(pipe, 'TERM=dumb', 'CLICOLOR_FORCE=1')).toBe(ColorProfile.ANSI);
+    expect(d(tty, 'TERM=vt100', 'CLICOLOR=1')).toBe(ColorProfile.ANSI);
+  });
+
+  test('Println output is written as given, as Go does', async () => {
+    const output = new PassThrough();
+    let out = '';
+    output.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    const model: Model = { init: () => null, update: (m: Msg) => [model, m instanceof EnvMsg ? Quit : null], view: () => 'frame' };
+    const program = new Program(
+      model,
+      WithInput(null),
+      WithOutput(output),
+      WithWindowSize(40, 5),
+      WithoutSignalHandler(),
+      WithColorProfile(ColorProfile.ANSI256),
+    );
+    program.println(ORANGE);
+    await program.run();
+    expect(out).toContain(ORANGE);
+  });
+});
+
+describe('Startup probe and settle()', () => {
+  test('the probe is written when output is not a terminal, as in Go; only disabled input or Apple Terminal skip it', async () => {
+    const run = async (input: PassThrough | null, env: string[]) => {
+      const output = new PassThrough();
+      let out = '';
+      output.on('data', (chunk: Buffer) => (out += chunk.toString()));
+      const model: Model = { init: () => Quit, update: () => [model, null], view: () => '' };
+      await new Program(model, WithInput(input), WithOutput(output), WithWindowSize(10, 2), WithoutSignalHandler(), WithEnvironment(env)).run();
+      return out;
+    };
+    const probe = ansi.requestSyncOutputMode + ansi.requestUnicodeCoreMode;
+    expect(await run(new PassThrough(), ['TERM=xterm-256color'])).toContain(probe);
+    expect(await run(null, ['TERM=xterm-256color'])).not.toContain(probe);
+    expect(await run(new PassThrough(), ['TERM=xterm-256color', 'TERM_PROGRAM=Apple_Terminal'])).not.toContain(probe);
+  });
+
+  test('settle() resolves after the queued messages are handled and their frame is written', async () => {
+    const output = new PassThrough();
+    let out = '';
+    output.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    class Counter implements Model {
+      constructor(readonly n = 0) {}
+      init(): Cmd {
+        return null;
+      }
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof QuitMsg) return [this, Quit];
+        // Each key also sends a follow-up message from a synchronous command.
+        if (msg instanceof KeyPressMsg) return [new Counter(this.n + 1), () => new WindowSizeMsg(10, 2 + this.n)];
+        return [this, null];
+      }
+      view(): string {
+        return `count=${this.n}`;
+      }
+    }
+    // A low frame rate: without settle() the frame would arrive a second later.
+    const program = new Program(new Counter(), WithInput(new PassThrough()), WithOutput(output), WithWindowSize(20, 2), WithoutSignalHandler(), WithFPS(1));
+    const done = program.run();
+    for (let i = 0; i < 3; i++) program.send(new KeyPressMsg({ code: 0x61, text: 'a', mod: KeyMod.None }));
+    await program.settle();
+    expect(out).toContain('count=3');
+    program.quit();
+    await done;
+    await program.settle(); // not running: resolves at once
   });
 });
