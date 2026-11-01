@@ -10,7 +10,7 @@
  *   @oakoliver/teatest     station.test.ts: golden-file tests of the main flows
  *
  * THE DATA IS INVENTED. Six made-up services follow a seeded random walk with
- * a scripted incident every minute (a slow payments database, a bad search
+ * a scripted incident every two minutes (a slow payments database, a bad search
  * release and its rollback). The header says SIMULATED. Nothing is read from
  * this machine or the network.
  *
@@ -52,7 +52,7 @@ const DEMO = argv.includes('--demo');
 const port = Number(flag('--port', '2323'));
 const seed = Number(flag('--seed', '7'));
 const out = flag('--out', '.');
-const PACE_MS = 400; // one step of station time (5 s) every 400 ms
+const PACE_MS = 800; // one step of station time (5 s) every 800 ms
 
 const world = new World(seed);
 

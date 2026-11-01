@@ -9,8 +9,8 @@
  * the same screen. That is what makes the golden-file tests possible.
  *
  * Time is simulated. One step is five seconds of station time; the program
- * decides how often to step (main.ts does it every 400 ms, so the station runs
- * at 12.5x). Tests step it by hand.
+ * decides how often to step (main.ts does it every 800 ms, so the station runs
+ * at 6.25x). Tests step it by hand.
  */
 
 export interface ServiceDef {
@@ -120,14 +120,14 @@ const PATHS: string[][] = [
 
 /**
  * The incident script, in steps since the first live step. It repeats every
- * CYCLE steps (12.5 minutes of station time, one minute of real time), so a
+ * CYCLE steps (12.5 minutes of station time, two minutes of real time), so a
  * server left running keeps having incidents.
  */
 const CYCLE = 150;
 const SCRIPT = {
-  paymentsSlow: [6, 52] as const, // a slow database: payments p95 climbs past 400 ms
-  searchDeploy: 24, // a bad search release: errors jump two steps later
-  searchRollback: 46,
+  paymentsSlow: [2, 30] as const, // a slow database: payments p95 climbs past 400 ms
+  searchDeploy: 10, // a bad search release: errors jump two steps later
+  searchRollback: 22,
 };
 
 export class World {

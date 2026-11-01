@@ -3,12 +3,18 @@
 # the users alice and bob along a script, aimed at zones by ID (a recorder cannot
 # click). alice is the ssh session typed below; a background script
 # (assets/tapes/station-bot.ts) keeps bob's SSH session open.
+#
+# A live dashboard changes most of the screen on every step, so the raw GIF is
+# about 2.6 MB. The committed one is reduced to 10 fps and 48 colours, then
+# compressed lossily (about 1.2 MB):
+#   ffmpeg -i station.gif -vf "fps=10,split[a][b];[a]palettegen=max_colors=48:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" small.gif
+#   gifsicle -O3 --lossy=80 small.gif -o assets/station.gif
 Output "/Users/oliveiraantoniocc/Documents/projects/bubbletea-worktrees/mixed-example/assets/station.gif"
 
 Set Shell bash
-Set FontSize 16
-Set Width 1220
-Set Height 760
+Set FontSize 14
+Set Width 1110
+Set Height 680
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
@@ -29,7 +35,7 @@ Sleep 300ms
 Enter
 # bob joins; payments slows down and alice acknowledges it; she zooms the latency
 # chart; search starts failing and bob acknowledges that one from his session
-Sleep 24s
+Sleep 25s
 Type "q"
 Sleep 800ms
 

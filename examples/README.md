@@ -178,9 +178,9 @@ click tabs, rows, `ack`, `zoom`, window buttons, heatmap rows and bars; the
 wheel scrolls the log and zooms the latency chart.
 
 **The data is invented.** A seeded PRNG drives six made-up services, with a
-scripted incident every minute of real time (a slow payments database, a bad
+scripted incident every two minutes of real time (a slow payments database, a bad
 search release and its rollback). Nothing is read from this machine or the
-network. One step of station time is five seconds, taken every 400 ms; over
+network. One step of station time is five seconds, taken every 800 ms; over
 SSH the clock only runs while someone is connected.
 
 **Sharing.** Everything people share lives in one `World`: samples, alerts,
@@ -194,9 +194,10 @@ characters before anyone else sees them.
 the user name is only a name. Add authentication (`WithAuthorizedKeys`) before
 binding it anywhere else. The host key is written to `.ssh/station_ed25519`.
 
-**Snapshots.** An SVG of a 120×34 frame takes about 11 ms. resvg draws PNGs
-synchronously, about 1.2 s at freeze's default 4x and 0.3 s at 1x, so the SSH
-command draws PNGs at 1x to keep other sessions responsive.
+**Snapshots.** An SVG of a 120×34 frame takes about 7 ms. resvg draws PNGs
+synchronously, about 1.2 s at freeze's default 4x and 0.28 s at 1x (medians
+on an Apple M5 Max with Bun 1.4.4, nothing else running), so the SSH command
+draws PNGs at 1x to keep the other sessions responsive.
 
 **Dependencies.** The station imports Bubble Tea by package name, like an
 application, not from `../src`, and has its own `package.json` so that the

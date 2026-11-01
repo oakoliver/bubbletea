@@ -214,7 +214,7 @@ describe('snapshots', () => {
     const svg = (await sess.output('snapshot')).toString();
     expect(svg.startsWith('<?xml')).toBe(true);
     expect(svg).toContain('<svg');
-    expect(svg).toContain('payments p95 490ms &gt; 400');
+    expect(svg).toMatch(/payments p95 \d+ms &gt; 400/);
 
     const other = await testsession.New(srv);
     await expect(other.output('reboot')).rejects.toThrow('status 2');

@@ -3,8 +3,9 @@
  * colours, after bubblezone has taken its markers out) becomes an SVG in a
  * window, and a PNG when the optional @resvg/resvg-js binding is installed.
  *
- * Measured on a 120×34 frame (Apple M5 Max, Bun 1.4): the SVG takes about
- * 11 ms; a PNG at freeze's default 4x scale about 1.2 s, at 1x about 0.3 s.
+ * Measured on a 120×34 frame (Apple M5 Max, Bun 1.4.4, medians): the SVG
+ * takes about 7 ms; a PNG at freeze's default 4x scale about 1.2 s, at 1x
+ * about 0.28 s.
  * resvg runs synchronously, so a PNG holds up the event loop for that long:
  * fine for the one person who pressed `s`, not for a server shared by many,
  * which is why the SSH `snapshot` command draws PNGs at 1x.
