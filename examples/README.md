@@ -195,10 +195,7 @@ characters before anyone else sees them.
 the user name is only a name. Add authentication (`WithAuthorizedKeys`) before
 binding it anywhere else. The host key is written to `.ssh/station_ed25519`.
 
-**Snapshots.** An SVG of a 120×34 frame takes about 7 ms. resvg draws PNGs
-synchronously, about 1.2 s at freeze's default 4x and 0.28 s at 1x (medians
-on an Apple M5 Max with Bun 1.4.4, nothing else running), so the SSH command
-draws PNGs at 1x to keep the other sessions responsive.
+**Snapshots.** An SVG of a 120×34 frame takes about 7 ms. A PNG at freeze's default 4x scale takes about 1.2 s, which would hold up every session if resvg ran on the main thread (medians on an Apple M5 Max with Bun 1.4.4, nothing else running). The SSH command uses freeze 1.1's `renderPNGAsync`: resvg draws on a worker thread, so other sessions keep running, and only the PNG encoding of the finished pixels (about 150 ms) happens on the main thread. The `s` key still draws synchronously in your own terminal, where nobody else is waiting.
 
 **Dependencies.** The station imports Bubble Tea by package name, like an
 application, not from `../src`, and has its own `package.json` so that the
