@@ -660,7 +660,9 @@ describe('Input parser', () => {
     // Alt+a = ESC a
     const msgs = parseInput(Buffer.from([0x1b, 0x61]));
     expect(msgs[0].mod & KeyMod.Alt).toBeTruthy();
-    expect(msgs[0].text).toBe('a');
+    expect(msgs[0].code).toBe(0x61);
+    expect(msgs[0].text).toBe('');
+    expect(msgs[0].toString()).toBe('alt+a');
   });
 
   test('parses Shift+Tab', () => {
@@ -1343,7 +1345,7 @@ describe('Bubble Tea v2.0.8 parity surface', () => {
     expect(altTab.toString()).toBe('alt+tab');
 
     const [altUnicode] = parseInput(Buffer.concat([Buffer.from([0x1b]), Buffer.from('€')]));
-    expect(altUnicode.toString()).toBe('€');
+    expect(altUnicode.toString()).toBe('alt+€');
     expect(altUnicode.keystroke()).toBe('alt+€');
   });
 

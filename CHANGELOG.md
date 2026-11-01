@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+### Fixed
+
+- **Alt+letter keys read as `alt+x`.** `ESC x` was decoded with `text: 'x'`, so `toString()` returned `"x"` and bindings such as `alt+b` never matched. As in Go, Alt-prefixed keys now carry no text, and an upper-case letter is reported as its lower-case code with shift (`alt+shift+a`).
+
 ## 1.2.1
 
 ### Fixed

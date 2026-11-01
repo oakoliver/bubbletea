@@ -98,14 +98,19 @@ export function parseInput(data: Buffer | Uint8Array): Msg[] {
       // Bracketed paste start: ESC [ 200 ~
       // (handled in CSI parser)
 
-      // Alt+key: ESC followed by a regular character
+      // Alt+key: ESC followed by a regular character. Like Go, the text is
+      // dropped so the key reads as "alt+x", and an upper-case letter is
+      // reported as its lower-case code plus shift.
       if (next >= 0x20 && next < 0x7f) {
         const ch = String.fromCharCode(next);
+        const lower = ch.toLowerCase();
+        const upper = ch !== lower;
         msgs.push(
           new KeyPressMsg({
-            text: ch,
-            mod: KeyMod.Alt,
-            code: next,
+            text: '',
+            mod: upper ? KeyMod.Alt | KeyMod.Shift : KeyMod.Alt,
+            code: upper ? lower.charCodeAt(0) : next,
+            shiftedCode: upper ? next : undefined,
           }),
         );
         i += 2;
@@ -116,7 +121,7 @@ export function parseInput(data: Buffer | Uint8Array): Msg[] {
         const decoded = parseUTF8(data, i + 1);
         msgs.push(
           new KeyPressMsg({
-            text: decoded.char,
+            text: '',
             mod: KeyMod.Alt,
             code: decoded.char.codePointAt(0) ?? next,
           }),
