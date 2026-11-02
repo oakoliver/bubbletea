@@ -62,7 +62,7 @@ the tarballs:
 ```sh
 git clone -b v1.1.0 https://github.com/oakoliver/freeze && (cd freeze && bun install && bun run build && npm pack)
 git clone -b v1.1.0 https://github.com/oakoliver/ntcharts && (cd ntcharts && bun install && bun run build && npm pack)
-git clone -b fixes https://github.com/oakoliver/teatest && (cd teatest && bun install && bun run build && npm pack)
+git clone -b v1.1.0 https://github.com/oakoliver/teatest && (cd teatest && bun install && bun run build && npm pack)
 bun add --no-save ./freeze/oakoliver-freeze-1.1.0.tgz ./ntcharts/oakoliver-ntcharts-1.1.0.tgz ./teatest/oakoliver-teatest-1.1.0.tgz
 ```
 
