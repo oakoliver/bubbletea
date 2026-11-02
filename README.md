@@ -1,6 +1,6 @@
 # @oakoliver/bubbletea
 
-Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.3.0 targets API and behavior parity with upstream **Bubble Tea v2.0.10**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
+Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) with zero runtime dependencies. Version 1.4.0 targets API and behavior parity with upstream **Bubble Tea v2.1.1**. See [CHANGELOG.md](CHANGELOG.md) for what each upstream sync ported.
 
 <img alt="A shopping-list program built with @oakoliver/bubbletea: the cursor moves through three items and space toggles their checkboxes" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/shopping-list.gif" width="600">
 
@@ -81,21 +81,23 @@ Keys, flags and details for each one are in [`examples/README.md`](examples/READ
 - Full Elm Architecture: `init`, `update`, `view` lifecycle
 - Keyboard and mouse input parsing (CSI, SS3, SGR, Kitty protocol)
 - Alt screen, bracketed paste, focus reporting
+- Terminal progress bar (OSC 9;4) and program status (OSC 7501)
 - Standard renderer with automatic 60fps flushing
 - Commands: `Batch` (concurrent), `Sequence` (ordered), `Tick`, `Every`
 - External cancellation via `AbortSignal`
 - Raw mode management, SIGINT/SIGTERM/SIGWINCH handling
 - Works on Node.js and Bun
 
-## Upstream v2.0.10 Surface Map
+## Upstream v2.1.1 Surface Map
 
-The TypeScript API keeps its established camel-case lifecycle (`init`, `update`, `view`, `run`, `send`) while mapping the complete portable v2.0.10 surface (v2.0.9 and v2.0.10 were fix-only releases on top of v2.0.8):
+The TypeScript API keeps its established camel-case lifecycle (`init`, `update`, `view`, `run`, `send`) while mapping the complete portable v2.1.1 surface (v2.1.0 added the Program Status Protocol on top of v2.0.10; v2.1.1 is a security fix):
 
 | Upstream Bubble Tea | TypeScript surface |
 | --- | --- |
 | `Model`, `Msg`, `Cmd`, `NewProgram`, `Program.Run/Send/Quit/Kill/Wait` | `Model`, `Msg`, `Cmd`, `NewProgram`, `Program.run/send/quit/kill/wait` |
 | `View`, `NewView`, `View.SetContent`, `Cursor`, `NewCursor`, `ProgressBar`, `NewProgressBar` | `View`, `NewView`, `View.setContent`, `Cursor`, `NewCursor`, `ProgressBar`, `NewProgressBar` |
-| View alt-screen, mouse, focus, paste, keyboard-enhancement, title, color, cursor, and progress fields | Corresponding camel-case `View` fields; string-returning legacy models remain supported |
+| View alt-screen, mouse, focus, paste, keyboard-enhancement, title, color, cursor, progress, and program-status fields | Corresponding camel-case `View` fields; string-returning legacy models remain supported |
+| `ProgramStatus`, `ProgramState*`, `ProgramStatusKind*`, `RequestProgramStatusSupport`, `ProgramStatusSupportMsg` (OSC 7501) | `ProgramStatus` (an object type), the `ProgramState` and `ProgramStatusKind` enums, `RequestProgramStatusSupport`, `ProgramStatusSupportMsg`; `ansi.setProgramStatus`, `ansi.clearProgramStatus`, `ansi.clearProgramStatusID`, `ansi.requestProgramStatusSupport` |
 | `Key`, `KeyMsg`, press/release messages, modifiers, special/Kitty key constants | `Key`, `KeyMsg`, `KeyPressMsg`, `KeyReleaseMsg`, `KeyMod`, `KeyCode`, `ExtendedKeyCode` |
 | `Mouse`, `MouseMsg`, button and click/release/wheel/motion messages | `Mouse`, `MouseMsg`, `MouseButton`, and the four concrete message classes |
 | Focus, paste, window, cursor, mode, color, clipboard, capability, terminal-version, environment, and color-profile reports | Same message names with camel-case fields and methods |
@@ -164,6 +166,7 @@ bun examples/counter.ts        # the Quick Start above
 bun examples/countdown.ts      # Tick, Sequence and Println
 bun examples/keys.ts           # how KeyPressMsg describes each key
 bun examples/window-size.ts    # alt screen + WindowSizeMsg
+bun examples/program-status.ts # Program Status Protocol (OSC 7501)
 ```
 
 The full-screen programs are listed under [Larger Examples](#larger-examples).
@@ -288,6 +291,29 @@ if (msg instanceof WindowSizeMsg) {
 }
 ```
 
+As in Go:
+
+- A terminal that reports a size of 0 (some CI runners, serial consoles and new ptys do) falls back to `COLUMNS` and `LINES` from the program's environment (`WithEnvironment`, or `process.env`), then to 80×24, one side at a time.
+- An output that is not a terminal has no size to read, and `COLUMNS`/`LINES` are not used for it. This port reports 80×24 there unless `WithWindowSize` says otherwise; Go reports 0×0.
+- Implausible sizes are dropped before your filter and model see them: a negative side, a side over 4096, or more than 1,048,576 cells. A size report is input, so this keeps a forged report (`CSI 8 ; 99999 ; 99999 t`) from making the program allocate for a huge screen ([GHSA-qc58-pfg9-7pph](https://github.com/charmbracelet/bubbletea/security/advisories/GHSA-qc58-pfg9-7pph)).
+
+## Program Status
+
+`View.programStatus` reports what the program is doing to terminals that implement the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501): idle, working (with optional progress), blocked on the user (and why), done, or failed. Terminals without it ignore the reports.
+
+```typescript
+const v = NewView(content);
+v.programStatus = {
+  state: ProgramState.Working,
+  app: 'deploy',
+  progress: 40,
+  hasProgress: true, // as in Go, progress is sent only with hasProgress
+  message: 'Pushing image',
+};
+```
+
+A report is sent only when the status changes, and `null` clears it. The status is left in place when the program exits, so report `Done`, `Error` or `Idle` before quitting. `RequestProgramStatusSupport` asks the terminal whether it supports the protocol; a `ProgramStatusSupportMsg` comes back if it does, and nothing if it doesn't (input must be enabled). See [`examples/program-status.ts`](examples/program-status.ts).
+
 ## External Control
 
 ```typescript
@@ -352,6 +378,7 @@ ac.abort(); // Program exits with ErrProgramKilled
 - `ClearScreenMsg` / `PrintLineMsg` — Renderer control
 - `EnvMsg` / `ColorProfileMsg` — Startup environment and detected/forced color profile
 - `KeyboardEnhancementsMsg` / `ModeReportMsg` — Terminal protocol capability reports
+- `ProgramStatusSupportMsg` — The terminal supports the Program Status Protocol
 - `ClipboardMsg` / color messages / `CapabilityMsg` / `TerminalVersionMsg` — Query responses
 
 ### Errors

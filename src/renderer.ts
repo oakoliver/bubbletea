@@ -13,6 +13,7 @@ import {
   KittyKeyboardFlag,
   MouseMode,
   ProgressBarState,
+  type ProgramStatus,
   View,
 } from './types.js';
 
@@ -120,6 +121,9 @@ export class StandardRenderer implements Renderer {
       if (view.cursor?.color) out += ansi.resetCursorColor;
       if (view.cursor) out += ansi.resetCursorShape;
       if (view.progressBar) out += ansi.resetProgressBar;
+      // Unlike the progress bar, the program status is left in place: done
+      // and error reports should outlive the program, and terminals drop
+      // working and blocked records when the process exits.
       if (view.windowTitle) out += ansi.resetWindowTitle;
       if (view.foregroundColor) out += ansi.resetForegroundColor;
       if (view.backgroundColor) out += ansi.resetBackgroundColor;
@@ -465,6 +469,14 @@ export class StandardRenderer implements Renderer {
         : ansi.setProgressBar(ProgressBarState.None, 0);
     }
 
+    // Report the program status if it's changed. After close() (a suspend or
+    // a released terminal) there is no previous view, so the last status is
+    // sent again, as Go's renderer does on start.
+    const oldStatus = previous?.programStatus ?? null;
+    if (!programStatusEquals(oldStatus, view.programStatus)) {
+      out += programStatusTransition(oldStatus, view.programStatus);
+    }
+
     return out;
   }
 
@@ -517,8 +529,37 @@ function normalizeColor(color: TerminalColor): string {
 }
 
 
+function programStatusEquals(a: ProgramStatus | null, b: ProgramStatus | null): boolean {
+  if (!a || !b) return a === b;
+  // Go compares the structs, so an absent field equals its zero value.
+  return (
+    a.state === b.state &&
+    (a.id ?? '') === (b.id ?? '') &&
+    (a.app ?? '') === (b.app ?? '') &&
+    (a.kind ?? '') === (b.kind ?? '') &&
+    (a.progress ?? 0) === (b.progress ?? 0) &&
+    (a.hasProgress ?? false) === (b.hasProgress ?? false) &&
+    (a.title ?? '') === (b.title ?? '') &&
+    (a.message ?? '') === (b.message ?? '')
+  );
+}
+
+/**
+ * Reports `cur` to the terminal. When `cur` is null, or addresses a different
+ * record than `prev`, the record of `prev` is cleared first.
+ */
+function programStatusTransition(prev: ProgramStatus | null, cur: ProgramStatus | null): string {
+  let out = '';
+  if (prev && (!cur || (cur.id ?? '') !== (prev.id ?? ''))) {
+    out += ansi.clearProgramStatusID(prev.id ?? '');
+  }
+  if (cur) out += ansi.setProgramStatus(cur);
+  return out;
+}
+
 function viewRenderStateEquals(left: View, right: View): boolean {
   return (
+    programStatusEquals(left.programStatus, right.programStatus) &&
     left.altScreen === right.altScreen &&
     left.disableBracketedPasteMode === right.disableBracketedPasteMode &&
     left.reportFocus === right.reportFocus &&

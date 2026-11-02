@@ -157,3 +157,149 @@ export const popKittyKeyboard = (n: number) => `${CSI}<${n > 0 ? n : ''}u`;
 export const setProgressBar = (state: number, value: number) =>
   `${OSC}9;4;${state};${value}${ST}`;
 export const resetProgressBar = `${OSC}9;4;0;0${ST}`;
+
+// ─── Program Status Protocol (OSC 7501) ────────────────────────────────────
+// Ports x/ansi's programstatus.go. The sequences end in BEL, as upstream's do.
+
+/** The fields of a Program Status Protocol report; see `ProgramStatus`. */
+interface ProgramStatusFields {
+  state: string;
+  id?: string;
+  app?: string;
+  kind?: string;
+  progress?: number;
+  hasProgress?: boolean;
+  title?: string;
+  message?: string;
+}
+
+const programStatusMaxTitle = 192;
+const programStatusMaxMessage = 2048;
+
+/**
+ * Removes every program status record on the terminal.
+ *
+ *     OSC 7501 ; state=clear BEL
+ */
+export const clearProgramStatus = `${OSC}7501;state=clear\x07`;
+
+/**
+ * Asks the terminal whether it supports the Program Status Protocol. A
+ * supporting terminal replies with `OSC 7501 ; ? ST`.
+ *
+ *     OSC 7501 ; ? BEL
+ */
+export const requestProgramStatusSupport = `${OSC}7501;?\x07`;
+
+/**
+ * Removes the record with the given id and every record beneath it. An empty
+ * id removes every record. Returns an empty string if the id is invalid.
+ *
+ *     OSC 7501 ; state=clear:id=Id BEL
+ */
+export function clearProgramStatusID(id: string): string {
+  return setProgramStatus({ state: 'clear', id });
+}
+
+/**
+ * Reports a program status with the Program Status Protocol (OSC 7501).
+ *
+ *     OSC 7501 ; key=value:key=value BEL
+ *
+ * Terminals discard a whole report when any part of it is invalid, so the
+ * report is sanitized: control characters in the title and message are
+ * replaced with spaces and the text is truncated to the protocol limits, and
+ * an invalid app, or a kind or progress used with the wrong state, is omitted.
+ * Returns an empty string if the state is unknown or the id is invalid.
+ *
+ * See: https://www.superlogical.com/rex/docs/build/program-status
+ */
+export function setProgramStatus(s: ProgramStatusFields): string {
+  switch (s.state) {
+    case 'idle':
+    case 'working':
+    case 'done':
+    case 'blocked':
+    case 'error':
+    case 'clear':
+      break;
+    default:
+      return '';
+  }
+  const id = s.id ?? '';
+  if (id !== '' && !validProgramStatusID(id)) return '';
+
+  const pairs = [`state=${s.state}`];
+  if (id !== '') pairs.push(`id=${id}`);
+  if (s.state === 'clear') return programStatusSequence(pairs);
+  if (s.state === 'blocked' && (s.kind === 'permission' || s.kind === 'question' || s.kind === 'auth')) {
+    pairs.push(`kind=${s.kind}`);
+  }
+  if (s.hasProgress && (s.state === 'working' || s.state === 'blocked')) {
+    // Go's int field: truncate, then clamp to 0–100.
+    const progress = Math.trunc(Number(s.progress ?? 0)) || 0;
+    pairs.push(`progress=${Math.min(Math.max(progress, 0), 100)}`);
+  }
+  if (validProgramStatusSegment(s.app ?? '')) pairs.push(`app=${s.app}`);
+  const title = programStatusText(s.title ?? '', programStatusMaxTitle);
+  if (title) pairs.push(`title=${title}`);
+  const message = programStatusText(s.message ?? '', programStatusMaxMessage);
+  if (message) pairs.push(`msg=${message}`);
+  return programStatusSequence(pairs);
+}
+
+function programStatusSequence(pairs: string[]): string {
+  return `${OSC}7501;${pairs.join(':')}\x07`;
+}
+
+/**
+ * Sanitizes, truncates (to `limit` UTF-8 bytes, on a character boundary) and
+ * base64-encodes free text.
+ */
+function programStatusText(s: string, limit: number): string {
+  // Lone surrogates become U+FFFD, as Go's strings.ToValidUTF8 does with
+  // invalid bytes.
+  s = s.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '�');
+  let sanitized = '';
+  let space = false;
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) {
+      if (!space) {
+        sanitized += ' ';
+        space = true;
+      }
+      continue;
+    }
+    space = false;
+    sanitized += ch;
+  }
+  let bytes = Buffer.from(trimGoSpace(sanitized), 'utf8');
+  if (bytes.length > limit) {
+    let end = limit;
+    // Step back to the start of a character (never cut a UTF-8 sequence).
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+    bytes = Buffer.from(trimGoSpace(bytes.subarray(0, end).toString('utf8')), 'utf8');
+  }
+  if (bytes.length === 0) return '';
+  return bytes.toString('base64');
+}
+
+/** Go's strings.TrimSpace: trims Unicode White_Space (JS's \s also has U+FEFF, which Go keeps). */
+function trimGoSpace(s: string): string {
+  return s.replace(goSpaceEdges, '');
+}
+
+const goSpaceEdges =
+  /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g;
+
+function validProgramStatusID(id: string): boolean {
+  if (Buffer.byteLength(id) > 128) return false;
+  const segments = id.split('/');
+  if (segments.length > 8) return false;
+  return segments.every(validProgramStatusSegment);
+}
+
+function validProgramStatusSegment(s: string): boolean {
+  return /^[A-Za-z0-9_.+-]{1,32}$/.test(s);
+}

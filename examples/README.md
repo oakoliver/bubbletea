@@ -11,6 +11,7 @@ bun examples/counter.ts        # the README Quick Start
 bun examples/countdown.ts      # Tick, Sequence and Println
 bun examples/keys.ts           # how KeyPressMsg describes each key
 bun examples/window-size.ts    # alt screen + WindowSizeMsg
+bun examples/program-status.ts # Program Status Protocol (OSC 7501)
 ```
 
 ## Larger programs

@@ -89,6 +89,80 @@ export function NewProgressBar(state: ProgressBarState, value: number): Progress
   return new ProgressBar(state, value);
 }
 
+/**
+ * The state of a {@link ProgramStatus} (Program Status Protocol, OSC 7501).
+ * The values are the strings the protocol sends.
+ *
+ * See: https://www.superlogical.com/rex/docs/build/program-status
+ */
+export enum ProgramState {
+  /** The program is at rest, waiting for the user's next instruction. */
+  Idle = 'idle',
+  /** The program is running. */
+  Working = 'working',
+  /** The program finished a piece of work and the result is ready to look at. */
+  Done = 'done',
+  /** The program cannot continue until the user does something. */
+  Blocked = 'blocked',
+  /** The program failed and stopped. */
+  Error = 'error',
+  /**
+   * Removes the addressed record and every record beneath it. With no id, it
+   * removes every record on the terminal.
+   */
+  Clear = 'clear',
+}
+
+/** What a blocked program waits for. */
+export enum ProgramStatusKind {
+  /** The program waits for approval to do something. */
+  Permission = 'permission',
+  /** The user must type an answer. */
+  Question = 'question',
+  /** The program waits for a login, token, or credential. */
+  Auth = 'auth',
+}
+
+/**
+ * A Program Status Protocol (OSC 7501) report: it tells the terminal whether
+ * the program is idle, working, waiting on the user, done, or failed, and why.
+ * Set it on {@link View.programStatus}. Terminals that don't support the
+ * protocol ignore it.
+ *
+ * Each report replaces its record completely, so fields such as `app` and
+ * `title` should be included in every report.
+ *
+ * See: https://www.superlogical.com/rex/docs/build/program-status
+ */
+export interface ProgramStatus {
+  /** The program state. Required. */
+  state: ProgramState;
+  /**
+   * Addresses a record. Empty means the root record. It is a "/" separated
+   * path of up to 8 segments matching `[A-Za-z0-9_.+-]{1,32}`.
+   */
+  id?: string;
+  /**
+   * A stable machine-readable program name matching `[A-Za-z0-9_.+-]{1,32}`.
+   * Invalid values are omitted.
+   */
+  app?: string;
+  /** What a blocked program waits for. Only used with `ProgramState.Blocked`. */
+  kind?: ProgramStatusKind;
+  /**
+   * A percentage between 0 and 100. As in Go, it is only sent when
+   * `hasProgress` is true, and only with `ProgramState.Working` and
+   * `ProgramState.Blocked`. Otherwise progress is indeterminate.
+   */
+  progress?: number;
+  /** Whether `progress` is set. */
+  hasProgress?: boolean;
+  /** A short human-readable label for the record. */
+  title?: string;
+  /** One human-readable line describing the record. */
+  message?: string;
+}
+
 /** Cursor rendered on top of the view. */
 export class Cursor implements Position {
   color: TerminalColor | null = null;
@@ -114,6 +188,20 @@ export class View {
   foregroundColor: TerminalColor | null = null;
   windowTitle = '';
   progressBar: ProgressBar | null = null;
+  /**
+   * Reports the program status to the terminal with the Program Status
+   * Protocol (OSC 7501): whether the program is idle, working, waiting on the
+   * user, done, or failed. Support depends on the terminal.
+   *
+   * The status usually addresses the root record (no `id`). Changing it sends
+   * a new report, and setting it back to null clears the record.
+   *
+   * The status is not cleared when the program exits, so done and error
+   * reports stay visible to the user. Report `ProgramState.Done`,
+   * `ProgramState.Error` or `ProgramState.Idle` before quitting rather than
+   * leaving a working or blocked status behind.
+   */
+  programStatus: ProgramStatus | null = null;
   altScreen = false;
   reportFocus = false;
   disableBracketedPasteMode = false;
@@ -145,6 +233,7 @@ export class View {
     view.progressBar = this.progressBar
       ? new ProgressBar(this.progressBar.state, this.progressBar.value)
       : null;
+    view.programStatus = this.programStatus ? { ...this.programStatus } : null;
     view.altScreen = this.altScreen;
     view.reportFocus = this.reportFocus;
     view.disableBracketedPasteMode = this.disableBracketedPasteMode;
@@ -888,6 +977,17 @@ export class CapabilityRequestMsg {
 }
 export class TerminalVersionRequestMsg {
   readonly _tag = 'TerminalVersionRequestMsg' as const;
+}
+export class ProgramStatusSupportRequestMsg {
+  readonly _tag = 'ProgramStatusSupportRequestMsg' as const;
+}
+
+/**
+ * Sent when the terminal replies to RequestProgramStatusSupport, meaning it
+ * supports the Program Status Protocol (OSC 7501).
+ */
+export class ProgramStatusSupportMsg {
+  readonly _tag = 'ProgramStatusSupportMsg' as const;
 }
 
 /** Blocking command used by Exec. Stream setters are called before run(). */

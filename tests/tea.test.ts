@@ -101,6 +101,11 @@ import {
   ReadPrimaryClipboard,
   RequestCapability,
   RequestTerminalVersion,
+  RequestProgramStatusSupport,
+  ProgramStatusSupportMsg,
+  ProgramState,
+  ProgramStatusKind,
+  type ProgramStatus,
 } from '../src/index.js';
 
 // ─── Helper: wait until condition ───────────────────────────────────────────
@@ -2564,5 +2569,470 @@ describe('Startup probe and settle()', () => {
     program.quit();
     await done;
     await program.settle(); // not running: resolves at once
+  });
+});
+
+// ─── Bubble Tea v2.1.0 / v2.1.1 ─────────────────────────────────────────────
+
+describe('Bubble Tea v2.1.1 parity', () => {
+  function capture(): { stream: PassThrough; data: () => string; reset: () => void } {
+    const stream = new PassThrough();
+    let data = '';
+    stream.on('data', (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+    return { stream, data: () => data, reset: () => (data = '') };
+  }
+
+  const b64 = (s: string) => Buffer.from(s).toString('base64');
+
+  // x/ansi programstatus_test.go — TestSetProgramStatus
+  test.each<[string, ProgramStatus, string]>([
+    ['minimal', { state: ProgramState.Working }, '\x1b]7501;state=working\x07'],
+    [
+      'spec example',
+      {
+        state: ProgramState.Blocked,
+        kind: ProgramStatusKind.Permission,
+        app: 'terraform',
+        message: 'Apply 3 to add, 1 to change, 0 to destroy?',
+      },
+      '\x1b]7501;state=blocked:kind=permission:app=terraform:msg=QXBwbHkgMyB0byBhZGQsIDEgdG8gY2hhbmdlLCAwIHRvIGRlc3Ryb3k/\x07',
+    ],
+    [
+      'all keys',
+      { state: ProgramState.Working, id: 'us-east', title: 'US East', progress: 40, hasProgress: true, message: 'Pushing image' },
+      '\x1b]7501;state=working:id=us-east:progress=40:title=VVMgRWFzdA==:msg=UHVzaGluZyBpbWFnZQ==\x07',
+    ],
+    ['progress clamped', { state: ProgramState.Blocked, progress: 300, hasProgress: true }, '\x1b]7501;state=blocked:progress=100\x07'],
+    ['zero progress', { state: ProgramState.Working, hasProgress: true }, '\x1b]7501;state=working:progress=0\x07'],
+    ['progress ignored for done', { state: ProgramState.Done, progress: 50, hasProgress: true }, '\x1b]7501;state=done\x07'],
+    ['progress without hasProgress is ignored, as in Go', { state: ProgramState.Working, progress: 50 }, '\x1b]7501;state=working\x07'],
+    ['kind ignored for working', { state: ProgramState.Working, kind: ProgramStatusKind.Auth }, '\x1b]7501;state=working\x07'],
+    ['unknown kind omitted', { state: ProgramState.Blocked, kind: 'nope' as ProgramStatusKind }, '\x1b]7501;state=blocked\x07'],
+    ['invalid app omitted', { state: ProgramState.Idle, app: 'my app' }, '\x1b]7501;state=idle\x07'],
+    [
+      'control chars stripped',
+      { state: ProgramState.Error, message: '  a\n\tb\x1b]2;x\x07 \u009bc  ' },
+      '\x1b]7501;state=error:msg=' + b64('a b ]2;x   c') + '\x07',
+    ],
+    ['only control chars', { state: ProgramState.Error, message: '\n\n' }, '\x1b]7501;state=error\x07'],
+    ['clear ignores fields', { state: ProgramState.Clear, app: 'x', message: 'y' }, ansi.clearProgramStatus],
+    ['unknown state', { state: 'busy' as ProgramState }, ''],
+    ['invalid id char', { state: ProgramState.Idle, id: 'a b' }, ''],
+    ['invalid id empty segment', { state: ProgramState.Idle, id: 'a//b' }, ''],
+    ['invalid id depth', { state: ProgramState.Idle, id: 'a/b/c/d/e/f/g/h/i' }, ''],
+    ['invalid id segment length', { state: ProgramState.Idle, id: 'a'.repeat(33) }, ''],
+    ['nested id', { state: ProgramState.Idle, id: 'build/test' }, '\x1b]7501;state=idle:id=build/test\x07'],
+  ])('ansi.setProgramStatus: %s', (_name, status, want) => {
+    expect(ansi.setProgramStatus(status)).toBe(want);
+  });
+
+  // x/ansi programstatus_test.go — TestProgramStatusTruncation
+  test('ansi.setProgramStatus truncates text to the protocol limit without splitting a character', () => {
+    // 'é' is 2 bytes, so 2048 bytes would split the last character.
+    const msg = 'x' + 'é'.repeat(1100);
+    const seq = ansi.setProgramStatus({ state: ProgramState.Done, message: msg });
+    const prefix = '\x1b]7501;state=done:msg=';
+    expect(seq.startsWith(prefix)).toBe(true);
+    const decoded = Buffer.from(seq.slice(prefix.length, -1), 'base64');
+    expect(decoded.length).toBe(2047);
+    expect(decoded.toString('utf8')).toBe('x' + 'é'.repeat(1023));
+    expect(seq.length).toBeLessThanOrEqual(4096);
+    // The title's limit is 192 bytes.
+    const title = ansi.setProgramStatus({ state: ProgramState.Idle, title: 't'.repeat(300) });
+    expect(Buffer.from(title.split('title=')[1]!.slice(0, -1), 'base64').length).toBe(192);
+  });
+
+  // x/ansi programstatus_test.go — TestClearProgramStatusID
+  test('ansi.clearProgramStatusID and requestProgramStatusSupport', () => {
+    expect(ansi.clearProgramStatusID('')).toBe(ansi.clearProgramStatus);
+    expect(ansi.clearProgramStatus).toBe('\x1b]7501;state=clear\x07');
+    expect(ansi.clearProgramStatusID('eu-west')).toBe('\x1b]7501;state=clear:id=eu-west\x07');
+    expect(ansi.clearProgramStatusID('bad id')).toBe('');
+    expect(ansi.requestProgramStatusSupport).toBe('\x1b]7501;?\x07');
+  });
+
+  // programstatus_test.go — TestCursedRenderer_programStatus
+  test('the renderer reports program status changes, clears replaced records and leaves the status on close (#1841)', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+
+    const step = (status: ProgramStatus | null): string => {
+      out.reset();
+      const view = NewView('hello');
+      view.programStatus = status;
+      r.render(view);
+      r.flush(false);
+      return out.data();
+    };
+    const assertInOrder = (data: string, ...needles: string[]) => {
+      let at = 0;
+      for (const needle of needles) {
+        const i = data.indexOf(needle, at);
+        expect(i).toBeGreaterThanOrEqual(0);
+        at = i + needle.length;
+      }
+    };
+
+    const working: ProgramStatus = { state: ProgramState.Working, app: 'tea', message: 'Building' };
+    expect(step(working)).toContain(ansi.setProgramStatus(working));
+
+    const same = { ...working };
+    expect(step(same)).not.toContain('7501');
+
+    const changed = { ...same, message: 'Linking' };
+    expect(step(changed)).toContain(ansi.setProgramStatus(changed));
+
+    const child: ProgramStatus = { state: ProgramState.Blocked, id: 'job', kind: ProgramStatusKind.Question };
+    let got = step(child);
+    expect(got).not.toContain(ansi.clearProgramStatusID('job'));
+    // The root record is cleared before the new record is reported.
+    assertInOrder(got, ansi.clearProgramStatus, ansi.setProgramStatus(child));
+
+    expect(step(null)).toContain(ansi.clearProgramStatusID('job'));
+
+    expect(step({ state: ProgramState.Idle, id: 'bad id' })).not.toContain('7501');
+
+    const done: ProgramStatus = { state: ProgramState.Done, app: 'tea' };
+    step(done);
+    out.reset();
+    r.close();
+    expect(out.data()).not.toContain('7501');
+
+    // Resuming re-sends the last status.
+    out.reset();
+    r.start();
+    const view = NewView('hello');
+    view.programStatus = done;
+    r.render(view);
+    r.flush(false);
+    expect(out.data()).toContain(ansi.setProgramStatus(done));
+  });
+
+  test('a status that only differs from the last frame is written even when the content is unchanged', () => {
+    const out = capture();
+    const r = new StandardRenderer(out.stream, 80, 24);
+    r.start();
+    r.render(NewView('same'));
+    r.flush(false);
+    out.reset();
+    const view = NewView('same');
+    view.programStatus = { state: ProgramState.Idle };
+    r.render(view);
+    r.flush(false);
+    expect(out.data()).toContain('\x1b]7501;state=idle\x07');
+    // An absent field equals its zero value, as Go compares the structs.
+    out.reset();
+    const again = NewView('same');
+    again.programStatus = { state: ProgramState.Idle, id: '', progress: 0, hasProgress: false };
+    r.render(again);
+    r.flush(false);
+    expect(out.data()).not.toContain('7501');
+  });
+
+  test('View.clone copies the program status', () => {
+    const view = NewView('x');
+    view.programStatus = { state: ProgramState.Working, message: 'a' };
+    const copy = view.clone();
+    expect(copy.programStatus).toEqual(view.programStatus);
+    expect(copy.programStatus).not.toBe(view.programStatus);
+  });
+
+  // programstatus_test.go — TestTranslateProgramStatusSupport; ultraviolet key_test.go OSC 7501 cases
+  test('OSC 7501 support replies decode to ProgramStatusSupportMsg', () => {
+    const msgs = parseInput(Buffer.from('\x1b]7501;?\x07\x1b]7501;?\x1b\\\x1b]7501;?foo=1\x07'));
+    expect(msgs).toHaveLength(3);
+    for (const msg of msgs) expect(msg).toBeInstanceOf(ProgramStatusSupportMsg);
+    // 8-bit OSC introducer.
+    expect(parseInput(Buffer.from([0x9d, ...Buffer.from('7501;?'), 0x07]))[0]).toBeInstanceOf(ProgramStatusSupportMsg);
+    // A report is not a reply.
+    expect(parseInput(Buffer.from('\x1b]7501;state=idle\x07')).some((m) => m instanceof ProgramStatusSupportMsg)).toBe(false);
+  });
+
+  test('RequestProgramStatusSupport queries the terminal, and not when input is disabled', async () => {
+    class SupportModel implements Model {
+      supported = false;
+      init(): Cmd {
+        return RequestProgramStatusSupport;
+      }
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof ProgramStatusSupportMsg) {
+          this.supported = true;
+          return [this, Quit];
+        }
+        return [this, null];
+      }
+      view(): string {
+        return 'status';
+      }
+    }
+    const input = new PassThrough();
+    const out = capture();
+    const model = new SupportModel();
+    const program = new Program(model, WithInput(input), WithOutput(out.stream), WithWindowSize(80, 24), WithoutSignalHandler());
+    const running = program.run();
+    await waitFor(() => out.data().includes(ansi.requestProgramStatusSupport));
+    input.write('\x1b]7501;?\x1b\\');
+    await running;
+    expect(model.supported).toBe(true);
+
+    const quiet = capture();
+    const quietModel: Model = { init: () => Sequence(RequestProgramStatusSupport, Quit), update: () => [quietModel, null], view: () => '' };
+    await new Program(
+      quietModel,
+      WithInput(null),
+      WithOutput(quiet.stream),
+      WithWindowSize(80, 24),
+      WithoutSignalHandler(),
+    ).run();
+    expect(quiet.data()).not.toContain('7501');
+  });
+
+  test('a program leaves its last status on the terminal when it exits', async () => {
+    const out = capture();
+    const model: Model = {
+      init: () => Quit,
+      update: () => [model, null],
+      view: () => {
+        const v = NewView('finished');
+        v.programStatus = { state: ProgramState.Done, app: 'build' };
+        return v;
+      },
+    };
+    await new Program(model, WithInput(null), WithOutput(out.stream), WithWindowSize(80, 24), WithoutSignalHandler()).run();
+    expect(out.data()).toContain('\x1b]7501;state=done:app=build\x07');
+    expect(out.data()).not.toContain('state=clear');
+  });
+
+  // screen_test.go — TestIsPlausibleWindowSize, through the event loop (#1887)
+  test('implausible window sizes are dropped before the filter and the model (GHSA-qc58-pfg9-7pph)', async () => {
+    const cases: Array<[number, number, boolean]> = [
+      [80, 24, true],
+      [0, 0, true],
+      [500, 200, true],
+      [4096, 256, true],
+      [-1, 24, false],
+      [80, -1, false],
+      [5000, 1, false],
+      [23000, 23000, false],
+      [29000, 29000, false],
+      [2000, 2000, false],
+      [4097, 1, false],
+      [1024, 1025, false],
+    ];
+    const seen: string[] = [];
+    const filtered: string[] = [];
+    class SizeModel implements Model {
+      init(): Cmd {
+        return null;
+      }
+      update(msg: Msg): [Model, Cmd] {
+        if (msg instanceof WindowSizeMsg) seen.push(`${msg.width}x${msg.height}`);
+        if (msg instanceof QuitMsg) return [this, Quit];
+        return [this, null];
+      }
+      view(): string {
+        return '';
+      }
+    }
+    const program = new Program(
+      new SizeModel(),
+      WithInput(nullInput()),
+      WithOutput(nullOutput()),
+      WithWindowSize(10, 5),
+      WithoutSignalHandler(),
+      WithFilter((_m, msg) => {
+        if (msg instanceof WindowSizeMsg) filtered.push(`${msg.width}x${msg.height}`);
+        return msg;
+      }),
+    );
+    const running = program.run();
+    for (const [w, h] of cases) program.send(new WindowSizeMsg(w, h));
+    await program.settle();
+    program.quit();
+    await running;
+    const want = ['10x5', ...cases.filter(([, , ok]) => ok).map(([w, h]) => `${w}x${h}`)];
+    expect(seen).toEqual(want);
+    expect(filtered).toEqual(want);
+  });
+
+  test('an implausible size report on the input is ignored', async () => {
+    const seen: string[] = [];
+    const input = new PassThrough();
+    const model: Model = {
+      init: () => null,
+      update: (msg: Msg) => {
+        if (msg instanceof WindowSizeMsg) seen.push(`${msg.width}x${msg.height}`);
+        return [model, null];
+      },
+      view: () => 'x',
+    };
+    const program = new Program(model, WithInput(input), WithOutput(nullOutput()), WithWindowSize(10, 5), WithoutSignalHandler());
+    const running = program.run();
+    // CSI 8 ; height ; width t, the reply to a window size request.
+    input.write('\x1b[8;99999;99999t\x1b[8;40;120t');
+    await waitFor(() => seen.length >= 2);
+    await program.settle();
+    program.quit();
+    await running;
+    expect(seen).toEqual(['10x5', '120x40']);
+  });
+
+  // tty_test.go — TestFallbackDimensions, through a terminal output that reports its size
+  function ttyOutput(columns: number, rows: number): PassThrough & { columns: number; rows: number } {
+    const stream = nullOutput() as PassThrough & { columns: number; rows: number; isTTY: boolean };
+    stream.columns = columns;
+    stream.rows = rows;
+    stream.isTTY = true;
+    return stream;
+  }
+
+  async function initialSize(output: PassThrough, ...options: Array<(p: Program) => void>): Promise<[number, number]> {
+    let size: [number, number] = [-1, -1];
+    const model: Model = {
+      init: () => null,
+      update: (msg: Msg) => {
+        if (msg instanceof WindowSizeMsg) {
+          size = [msg.width, msg.height];
+          return [model, Quit];
+        }
+        return [model, null];
+      },
+      view: () => '',
+    };
+    await new Program(model, WithInput(nullInput()), WithOutput(output), WithoutSignalHandler(), WithoutRenderer(), ...options).run();
+    return size;
+  }
+
+  test('a terminal reporting 0x0 falls back to 80x24 (#1836)', async () => {
+    expect(await initialSize(ttyOutput(0, 0), WithEnvironment({}))).toEqual([80, 24]);
+    expect(await initialSize(ttyOutput(-10, -5), WithEnvironment({}))).toEqual([80, 24]);
+  });
+
+  test('positive terminal dimensions are kept', async () => {
+    expect(await initialSize(ttyOutput(120, 40), WithEnvironment({ COLUMNS: '1', LINES: '1' }))).toEqual([120, 40]);
+  });
+
+  test('only the non-positive side falls back', async () => {
+    expect(await initialSize(ttyOutput(0, 50), WithEnvironment({}))).toEqual([80, 50]);
+    expect(await initialSize(ttyOutput(100, 0), WithEnvironment({}))).toEqual([100, 24]);
+  });
+
+  test('the fallback reads COLUMNS and LINES from process.env', async () => {
+    const saved = [process.env.COLUMNS, process.env.LINES];
+    process.env.COLUMNS = '132';
+    process.env.LINES = '43';
+    try {
+      // The environment is read when the program is created, as in Go.
+      expect(await initialSize(ttyOutput(0, 0))).toEqual([132, 43]);
+    } finally {
+      if (saved[0] === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = saved[0];
+      if (saved[1] === undefined) delete process.env.LINES;
+      else process.env.LINES = saved[1];
+    }
+  });
+
+  test('the fallback prefers the program environment, and skips process.env when it has none', async () => {
+    const saved = [process.env.COLUMNS, process.env.LINES];
+    process.env.COLUMNS = '200';
+    process.env.LINES = '100';
+    try {
+      expect(await initialSize(ttyOutput(0, 0), WithEnvironment(['COLUMNS=150', 'LINES=60']))).toEqual([150, 60]);
+      expect(await initialSize(ttyOutput(0, 0), WithEnvironment(['OTHER_VAR=1']))).toEqual([80, 24]);
+    } finally {
+      if (saved[0] === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = saved[0];
+      if (saved[1] === undefined) delete process.env.LINES;
+      else process.env.LINES = saved[1];
+    }
+  });
+
+  test('invalid or non-positive COLUMNS and LINES fall back to 80x24', async () => {
+    expect(await initialSize(ttyOutput(0, 0), WithEnvironment({ COLUMNS: 'invalid', LINES: '-10' }))).toEqual([80, 24]);
+    expect(await initialSize(ttyOutput(0, 0), WithEnvironment({ COLUMNS: '0', LINES: '0' }))).toEqual([80, 24]);
+    expect(await initialSize(ttyOutput(0, 0), WithEnvironment({ COLUMNS: '12abc', LINES: '1.5' }))).toEqual([80, 24]);
+  });
+
+  test('the fallback also applies to RequestWindowSize and resizes', async () => {
+    const output = ttyOutput(0, 0);
+    const sizes: string[] = [];
+    const model: Model = {
+      init: () => RequestWindowSize,
+      update: (msg: Msg) => {
+        if (msg instanceof WindowSizeMsg) sizes.push(`${msg.width}x${msg.height}`);
+        return [model, sizes.length >= 2 ? Quit : null];
+      },
+      view: () => '',
+    };
+    await new Program(model, WithInput(nullInput()), WithOutput(output), WithoutSignalHandler(), WithoutRenderer(), WithEnvironment({ COLUMNS: '90', LINES: '30' })).run();
+    expect(sizes).toEqual(['90x30', '90x30']);
+  });
+
+  // tty_test.go — TestProgramNonTTYDimensions. Go reports 0x0 for an output
+  // that is not a terminal; this port has always reported 80x24 there. What
+  // both share, and what upstream's test is about: COLUMNS and LINES are not
+  // read for a non-terminal output, and WithWindowSize is kept.
+  test('an output that is not a terminal does not read COLUMNS and LINES', async () => {
+    const saved = [process.env.COLUMNS, process.env.LINES];
+    process.env.COLUMNS = '110';
+    process.env.LINES = '35';
+    try {
+      expect(await initialSize(nullOutput())).toEqual([80, 24]);
+      expect(await initialSize(nullOutput(), WithEnvironment(['COLUMNS=150', 'LINES=60']))).toEqual([80, 24]);
+      expect(await initialSize(nullOutput(), WithWindowSize(120, 50))).toEqual([120, 50]);
+    } finally {
+      if (saved[0] === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = saved[0];
+      if (saved[1] === undefined) delete process.env.LINES;
+      else process.env.LINES = saved[1];
+    }
+  });
+
+  // signals_test.go — TestHandleSignalsReturnsAfterContextCancelDuringPendingSend.
+  // Go's handler could block forever sending on the message channel after the
+  // event loop stopped (#1806). Here the handler only queues the message, so it
+  // never blocks; what must hold is that a signal arriving during shutdown
+  // neither hangs run() nor reaches a finished program.
+  test('a signal during shutdown does not hang run(), and handlers are removed after it (#1806)', async () => {
+    const baseline = process.listenerCount('SIGINT');
+    let updates = 0;
+    let views = 0;
+    let listenersAtSignal = -1;
+    const model: Model = {
+      init: () => Quit,
+      update: () => {
+        updates++;
+        return [model, null];
+      },
+      view: () => {
+        // The second view is the final render, after the event loop has
+        // stopped and before shutdown: nobody reads messages any more, the
+        // state in which Go's handler blocked forever.
+        if (++views === 2) {
+          listenersAtSignal = process.listenerCount('SIGINT');
+          process.emit('SIGINT');
+        }
+        return '';
+      },
+    };
+    const program = new Program(model, WithInput(nullInput()), WithOutput(nullOutput()), WithWindowSize(10, 2), WithoutRenderer());
+    const result = await Promise.race([
+      program.run().then(
+        () => 'returned',
+        (err) => (err === ErrInterrupted ? 'interrupted' : String(err)),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 2000)),
+    ]);
+    expect(result).toBe('returned');
+    // The program's handler was still installed when the signal arrived.
+    expect(listenersAtSignal).toBe(baseline + 1);
+    expect(process.listenerCount('SIGINT')).toBe(baseline);
+    const before = updates;
+    process.emit('SIGINT');
+    await new Promise((r) => setTimeout(r, 5));
+    expect(updates).toBe(before);
   });
 });

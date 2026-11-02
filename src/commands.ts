@@ -24,6 +24,7 @@ import {
   ClipboardSetRequestMsg,
   CapabilityRequestMsg,
   TerminalVersionRequestMsg,
+  ProgramStatusSupportRequestMsg,
   ExecRequestMsg,
   BatchMsg,
   SequenceMsg,
@@ -227,6 +228,18 @@ export function RequestCapability(capability: string): Cmd {
  */
 export function RequestTerminalVersion(): Msg {
   return new TerminalVersionRequestMsg();
+}
+
+/**
+ * Asks the terminal whether it supports the Program Status Protocol
+ * (OSC 7501). A supporting terminal replies with a ProgramStatusSupportMsg.
+ * Terminals that don't support it never reply, so pick your own timeout. Use
+ * WithInput to enable input, since the reply cannot be read otherwise.
+ *
+ * Detection is optional: reports can be sent without it.
+ */
+export function RequestProgramStatusSupport(): Msg {
+  return new ProgramStatusSupportRequestMsg();
 }
 
 // ─── Blocking terminal commands ─────────────────────────────────────────────

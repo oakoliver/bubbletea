@@ -23,6 +23,7 @@ import {
   PasteEndMsg,
   CursorPositionMsg,
   WindowSizeMsg,
+  ProgramStatusSupportMsg,
   KeyboardEnhancementsMsg,
   ModeReportMsg,
   ModeSetting,
@@ -750,6 +751,12 @@ function parseOSC(data: Buffer | Uint8Array, offset: number): ParseResult {
   }
   if (command === 12) {
     return { msg: new CursorColorMsg(normalizeXtermColor(value)), next: terminated.next };
+  }
+  if (command === 7501) {
+    // Program Status Protocol support reply (OSC 7501 ; ? ST). Like
+    // ultraviolet, anything after the '?' is ignored; a report such as
+    // "state=idle" is not a reply.
+    return { msg: value.startsWith('?') ? new ProgramStatusSupportMsg() : null, next: terminated.next };
   }
   if (command === 52) {
     const split = value.indexOf(';');

@@ -29,6 +29,7 @@ import {
   WindowSizeRequestMsg,
   CursorPositionRequestMsg,
   BackgroundColorRequestMsg,
+  ProgramStatusSupportRequestMsg,
   ForegroundColorRequestMsg,
   CursorColorRequestMsg,
   ClipboardReadRequestMsg,
@@ -68,6 +69,24 @@ import * as ansi from './ansi.js';
 
 const DEFAULT_FPS = 60;
 const MAX_FPS = 120;
+
+/** Go's defaultWidth and defaultHeight (tty.go). */
+const DEFAULT_WIDTH = 80;
+const DEFAULT_HEIGHT = 24;
+
+/** Go's maxWindowDimension and maxWindowCells (screen.go). */
+const MAX_WINDOW_DIMENSION = 4096;
+const MAX_WINDOW_CELLS = 1 << 20;
+
+/**
+ * Go's isPlausibleWindowSize: no negative side, neither side over 4096, and
+ * at most 1,048,576 cells. 0x0 is plausible.
+ */
+function isPlausibleWindowSize(width: number, height: number): boolean {
+  if (!(width >= 0) || !(height >= 0)) return false;
+  if (width > MAX_WINDOW_DIMENSION || height > MAX_WINDOW_DIMENSION) return false;
+  return width * height <= MAX_WINDOW_CELLS;
+}
 
 // ─── ProgramOption ──────────────────────────────────────────────────────────
 
@@ -609,6 +628,14 @@ export class Program {
     model: Model,
     msg: Msg,
   ): Promise<{ model: Model; cmd: Cmd; done: boolean; error?: Error } | null> {
+    // Drop implausible sizes before anything sees them (upstream #1887,
+    // GHSA-qc58-pfg9-7pph): a terminal size report is input, so anything
+    // that can write to the input can claim a 99999x99999 window and make
+    // the renderer and the model allocate for it.
+    if (msg instanceof WindowSizeMsg && !isPlausibleWindowSize(msg.width, msg.height)) {
+      return null;
+    }
+
     // Apply filter
     if (this._filter) {
       const filtered = this._filter(model, msg);
@@ -632,7 +659,7 @@ export class Program {
       this._height = msg.height;
     }
     if (msg instanceof WindowSizeRequestMsg) {
-      const size = this._reportedTerminalSize();
+      const size = this._ttySize();
       if (size) this._enqueueMsg(new WindowSizeMsg(size.width, size.height));
       else this._executeQuery(ansi.requestWindowSize);
     }
@@ -659,6 +686,9 @@ export class Program {
     }
     if (msg instanceof TerminalVersionRequestMsg) {
       this._executeQuery(ansi.requestTerminalVersion);
+    }
+    if (msg instanceof ProgramStatusSupportRequestMsg) {
+      this._executeQuery(ansi.requestProgramStatusSupport);
     }
     if (msg instanceof ExecRequestMsg) {
       await this._executeInteractive(msg.command, msg.callback);
@@ -942,8 +972,41 @@ export class Program {
     return null;
   }
 
+  /**
+   * The size of a terminal output, with Go's fallback (upstream #1836) for a
+   * terminal that reports no size (0x0, as some CI runners, serial consoles
+   * and freshly created ptys do): COLUMNS and LINES from the program's
+   * environment, then 80x24. Null when the output is not a terminal.
+   */
+  private _ttySize(): { width: number; height: number } | null {
+    const size = this._reportedTerminalSize();
+    return size ? this._fallbackDimensions(size.width, size.height) : null;
+  }
+
+  /**
+   * Go's fallbackDimensions: a non-positive width or height is replaced by
+   * COLUMNS or LINES from the program's environment (WithEnvironment, or
+   * process.env when the program was created), or by 80x24.
+   */
+  private _fallbackDimensions(width: number, height: number): { width: number; height: number } {
+    const env = new EnvMsg(this._environment);
+    // strconv.Atoi: an optional sign and decimal digits, nothing else.
+    const positive = (value: string) => {
+      const n = /^[+-]?\d+$/.test(value) ? Number(value) : 0;
+      return n > 0 ? n : 0;
+    };
+    if (!(width > 0)) width = positive(env.getenv('COLUMNS')) || DEFAULT_WIDTH;
+    if (!(height > 0)) height = positive(env.getenv('LINES')) || DEFAULT_HEIGHT;
+    return { width, height };
+  }
+
+  /**
+   * The initial size: the terminal's, or 80x24 when the output is not a
+   * terminal. Go leaves a non-terminal output at 0x0; this port has always
+   * used 80x24 there, and COLUMNS/LINES are not read for it, as in Go.
+   */
   private _getTerminalSize(): { width: number; height: number } {
-    return this._reportedTerminalSize() ?? { width: 80, height: 24 };
+    return this._ttySize() ?? { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT };
   }
 
   private _enterRawMode(): void {
@@ -1065,12 +1128,14 @@ export class Program {
   }
 
   private _refreshTerminalSize(): void {
-    const size = this._reportedTerminalSize();
+    const size = this._ttySize();
     if (!size) {
       this._executeQuery(ansi.requestWindowSize);
       return;
     }
     if (size.width === this._width && size.height === this._height) return;
+    // The event loop would drop it anyway; don't resize the renderer for it.
+    if (!isPlausibleWindowSize(size.width, size.height)) return;
     this._width = size.width;
     this._height = size.height;
     this._renderer?.resize(size.width, size.height);
