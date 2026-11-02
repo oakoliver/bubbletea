@@ -28,6 +28,9 @@ bun examples/mission-control.ts       # dashboard (Bubbles, Lip Gloss)
 bun examples/station/main.ts [--serve] [--demo]
                                       # ops dashboard shared over SSH (ntcharts, bubblezone,
                                       # wish, freeze, teatest, Lip Gloss)
+bun examples/canary/host.ts [--faulty]
+                                      # a release you approve; OSC 7501 status in a host
+                                      # status line (huh, ntcharts, freeze, teatest)
 ```
 
 ### Dependencies
@@ -213,3 +216,23 @@ suite does not need these packages.
 The recording is made with `assets/tapes/station.tape`; a background script,
 `assets/tapes/station-bot.ts`, keeps bob's SSH session open while the
 server's demo script moves his pointer.
+
+## canary/
+
+A release of an invented service, from build through a 5% and a 25% canary to
+production, with a human approval before 100%. It shows what landed in the
+2026-11-02 releases: Bubble Tea 1.4's program status (OSC 7501) and colour
+profiles, huh 1.1.3's bound values, ntcharts 1.1's fixed zone IDs and
+`resetMax()`, freeze 1.1's `renderPNGAsync`, and teatest 1.1's `settle()`.
+`host.ts` runs a program in a pseudo-terminal and draws its OSC 7501 reports on
+a status line under it (Bun only).
+
+```sh
+bun examples/canary/main.ts                  # in this terminal (100×30 or more)
+bun examples/canary/host.ts [--faulty]       # under the host, with the status line
+bun test ./examples/canary/canary.test.ts    # 11 tests, UPDATE_GOLDEN=1 to rewrite the golden file
+```
+
+Flags, keys, and how to install freeze, ntcharts and teatest before they are on
+npm: [`canary/README.md`](canary/README.md). **The release is invented**: a
+seeded PRNG makes every number; nothing is built, deployed or read.

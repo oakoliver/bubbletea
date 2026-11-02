@@ -5,3 +5,5 @@ dist/
 .ssh/
 /station-*.svg
 /station-*.png
+/examples/canary/canary-*.png
+/canary-*.png

@@ -1,0 +1,5 @@
+{
+  "name": "canary-example",
+  "private": true,
+  "type": "module"
+}

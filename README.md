@@ -8,7 +8,7 @@ Elm Architecture TUI framework for TypeScript. A pure TypeScript port of [charmb
 
 ## Larger Examples
 
-Six full-screen programs in [`examples/`](examples/) combine Bubble Tea with our ports of [Bubbles](https://github.com/oakoliver/bubbles), [Lip Gloss](https://github.com/oakoliver/lipgloss) and [Glamour](https://github.com/oakoliver/glamour), and one of them with five more. To run them, see [Running the larger examples](#running-the-larger-examples).
+Seven full-screen programs in [`examples/`](examples/) combine Bubble Tea with our ports of [Bubbles](https://github.com/oakoliver/bubbles), [Lip Gloss](https://github.com/oakoliver/lipgloss) and [Glamour](https://github.com/oakoliver/glamour), and two of them with more. To run them, see [Running the larger examples](#running-the-larger-examples).
 
 ### chat.ts: a streaming coding-agent chat
 
@@ -48,6 +48,12 @@ Five more ports work together in [`examples/station/`](examples/station/): [ntch
 
 <img alt="A freeze snapshot of the station: the services table with sparklines, an open payments alert, the log, the payments latency chart crossing its objective, the error heatmap and the deploys bar chart, in a window with rounded corners and a shadow" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/station.svg" width="800">
 
+### canary: a release you approve, with its status in the terminal
+
+<img alt="examples/canary under host.ts: an invented release goes through build, test and image, then a 5% and a 25% canary with live error-rate charts. A 4x PNG snapshot is drawn while the pipeline keeps moving. At the approval gate the status line under the program turns yellow (blocked, permission) and a pre-filled approval form opens; after it is submitted, production runs and the status line turns green (done)" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/canary.gif" width="800">
+
+[`examples/canary/`](examples/canary/) reports what it is doing with the Program Status Protocol (OSC 7501): working with its progress, blocked on your approval, done, or an error after a rollback. [`host.ts`](examples/canary/host.ts) runs it (or any program) in a pseudo-terminal and shows those reports on a status line, as a terminal that supports the protocol does. The approval is a [huh](https://github.com/oakoliver/huh) form with pre-filled bound values; the charts are [ntcharts](https://github.com/oakoliver/ntcharts) with fixed zone IDs; `s` draws a 4x PNG with [freeze](https://github.com/oakoliver/freeze)'s `renderPNGAsync` while the pipeline keeps moving; [teatest](https://github.com/oakoliver/teatest) checks the screen after `settle()`. The release is invented and seeded.
+
 ### Running the larger examples
 
 They import this repository's source and the sibling ports by name. The ports are not dependencies of `bubbletea`, so install them without touching `package.json`:
@@ -72,6 +78,13 @@ bun examples/station/main.ts                    # in this terminal (120×34 or m
 bun examples/station/main.ts --serve            # then, from several terminals: ssh -p 2323 <name>@localhost
 ssh -p 2323 localhost snapshot > station.svg    # while it serves: an image of the current state
 bun test ./examples/station/station.test.ts     # its golden-file tests
+```
+
+The canary also needs huh 1.1.3, Lip Gloss 1.1.4 and freeze, ntcharts and teatest 1.1.0 ([how to install them](examples/canary/README.md)):
+
+```bash
+bun examples/canary/host.ts                     # 100×31 or more; main.ts without the status line
+bun test ./examples/canary/canary.test.ts
 ```
 
 Keys, flags and details for each one are in [`examples/README.md`](examples/README.md).
