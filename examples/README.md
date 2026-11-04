@@ -35,18 +35,21 @@ bun examples/canary/host.ts [--faulty]
 
 ### Dependencies
 
-These programs import this repository's source directly (`../src/index.ts`)
-and the sibling packages by name. They are not dependencies of `bubbletea`, so
-install them without touching `package.json`:
+The small programs import this repository's source directly (`../src/index.ts`).
+The larger ones import it or the published `@oakoliver/bubbletea`, and the
+sibling packages by name. Those are not dependencies of `bubbletea`;
+[`package.json`](package.json) in this folder lists them, so one command
+installs them into `examples/node_modules`:
 
 ```sh
-bun add --no-save @oakoliver/bubbles@^1.2.2 @oakoliver/lipgloss@^1.1.3 @oakoliver/glamour@^2.0.0
+bun install --cwd examples     # or: npm install --prefix examples
 ```
 
-They were written against `@oakoliver/bubbles` 1.2.2, `@oakoliver/lipgloss`
-1.1.3 and `@oakoliver/glamour` 2.0.0. Bubbles resolves `@oakoliver/bubbletea`
-from `node_modules`, a second copy next to `../src`; that works because Bubbles
-recognises messages by their tag rather than by class.
+The station and the canary import `@oakoliver/bubbletea` by name, so they run
+on the same copy as the ports they use. The other programs use `../src`, and
+Bubbles resolves `@oakoliver/bubbletea` from `examples/node_modules`, a second
+copy; that works because Bubbles recognises messages by their tag rather than
+by class.
 
 To type-check the examples: `bunx tsc -p examples/tsconfig.json`.
 

@@ -1,0 +1,18 @@
+{
+  "name": "bubbletea-examples",
+  "private": true,
+  "type": "module",
+  "description": "The sibling ports the larger examples use. Install with: bun install --cwd examples",
+  "dependencies": {
+    "@oakoliver/bubbles": "^1.2.2",
+    "@oakoliver/bubbletea": "^1.4.0",
+    "@oakoliver/bubblezone": "^1.0.0",
+    "@oakoliver/freeze": "^1.1.0",
+    "@oakoliver/glamour": "^2.0.0",
+    "@oakoliver/huh": "^1.1.3",
+    "@oakoliver/lipgloss": "^1.1.4",
+    "@oakoliver/ntcharts": "^1.1.0",
+    "@oakoliver/teatest": "^1.1.0",
+    "@oakoliver/wish": "^1.0.0"
+  }
+}

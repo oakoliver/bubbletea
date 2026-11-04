@@ -48,23 +48,9 @@ click a stage, a bar, or the chart.
 Node.js 26.8.1 (`node examples/canary/main.ts`). `host.ts` needs Bun, for the
 `terminal` option of `Bun.spawn`.
 
-**Dependencies.** Install the ports without touching `package.json`:
-
-```sh
-bun add --no-save @oakoliver/bubbles @oakoliver/bubblezone @oakoliver/lipgloss@^1.1.4 @oakoliver/huh@^1.1.3 \
-  @oakoliver/freeze@^1.1.0 @oakoliver/ntcharts@^1.1.0 @oakoliver/teatest@^1.1.0
-```
-
-On 2026-11-02, freeze 1.1.0, ntcharts 1.1.0 and teatest 1.1.0 were tagged but
-not yet on npm. Until they are, pack them from their repositories and install
-the tarballs:
-
-```sh
-git clone -b v1.1.0 https://github.com/oakoliver/freeze && (cd freeze && bun install && bun run build && npm pack)
-git clone -b v1.1.0 https://github.com/oakoliver/ntcharts && (cd ntcharts && bun install && bun run build && npm pack)
-git clone -b v1.1.0 https://github.com/oakoliver/teatest && (cd teatest && bun install && bun run build && npm pack)
-bun add --no-save ./freeze/oakoliver-freeze-1.1.0.tgz ./ntcharts/oakoliver-ntcharts-1.1.0.tgz ./teatest/oakoliver-teatest-1.1.0.tgz
-```
+**Dependencies.** From the repository root, `bun install --cwd examples`
+installs the ports listed in [`../package.json`](../package.json), among them
+huh 1.1.3, Lip Gloss 1.1.4 and freeze, ntcharts and teatest 1.1.0.
 
 Do not run the tests with teatest 1.0.0: Bubble Tea 1.3 and later give an output
 that is not a terminal no colours, and teatest 1.0.0's output does not say it is
