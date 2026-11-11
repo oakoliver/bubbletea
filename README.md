@@ -1,6 +1,6 @@
 # @oakoliver/bubbletea
 
-An unaffiliated TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea), the Elm Architecture framework for terminal apps. Runs on Node.js and Bun.
+An unaffiliated TypeScript port of [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea), the Elm Architecture framework for terminal apps. Runs on Node.js, Bun and Deno.
 
 <img alt="examples/station over SSH: alice connects with ssh and sees six invented services, a latency chart, an error heatmap and a deploys bar chart; bob, a second SSH user, appears in the header, his pointer moves across alice's screen and his selection marks the search row. A payments latency alert opens and alice acknowledges it; she zooms the latency chart and changes its window with the wheel; a search error alert opens and bob acknowledges it from his session; alice clicks the heatmap and the deploys tab. Then a single ssh command saves the station as station.svg" src="https://raw.githubusercontent.com/oakoliver/bubbletea/main/assets/station.gif" width="800">
 
@@ -159,7 +159,7 @@ bun test ./examples/canary/canary.test.ts
 - Commands: `Batch` (concurrent), `Sequence` (ordered), `Tick`, `Every`
 - External cancellation via `AbortSignal`
 - Raw mode management, SIGINT/SIGTERM/SIGWINCH handling
-- Works on Node.js and Bun
+- Works on Node.js, Bun and Deno (`npm:@oakoliver/bubbletea`)
 
 ## Upstream v2.1.1 Surface Map
 
